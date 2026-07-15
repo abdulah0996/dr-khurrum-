@@ -147,7 +147,7 @@ test("phone numbers normalize, mask, and isolate safely", () => {
 });
 
 test("environment validation blocks incomplete production configuration", () => {
-  const result = validateEnvironment({ NODE_ENV: "production" });
+  const result = validateEnvironment({ NODE_ENV: "production", WHATSAPP_REQUIRED: "true" });
   assert.equal(result.ok, false);
   assert.match(result.errors.join(" "), /MONGODB_URI/);
   assert.match(result.errors.join(" "), /WHATSAPP_ACCESS_TOKEN/);

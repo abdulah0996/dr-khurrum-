@@ -82,6 +82,28 @@ test("production environment validation accepts a complete configuration and rej
   assert.match(validateEnvironment(completeProductionEnvironment({ MONGODB_MIN_POOL_SIZE: "20", MONGODB_MAX_POOL_SIZE: "10" })).errors.join(" "), /must not exceed/);
 });
 
+test("production can launch web booking before Meta setup while strict WhatsApp mode fails closed", () => {
+  const webOnlyEnvironment = completeProductionEnvironment({
+    WHATSAPP_REQUIRED: "false",
+    WHATSAPP_ACCESS_TOKEN: "",
+    WHATSAPP_PHONE_NUMBER_ID: "",
+    WHATSAPP_BUSINESS_ACCOUNT_ID: "",
+    WHATSAPP_VERIFY_TOKEN: "",
+    META_APP_SECRET: ""
+  });
+  const webOnlyResult = validateEnvironment(webOnlyEnvironment);
+  assert.equal(webOnlyResult.ok, true);
+  assert.equal(webOnlyResult.whatsappConfigured, false);
+  assert.equal(webOnlyResult.whatsappRequired, false);
+  assert.match(webOnlyResult.warnings.join(" "), /Web booking remains available/);
+
+  const strictResult = validateEnvironment({ ...webOnlyEnvironment, WHATSAPP_REQUIRED: "true" });
+  assert.equal(strictResult.ok, false);
+  assert.equal(strictResult.whatsappRequired, true);
+  assert.match(strictResult.errors.join(" "), /WHATSAPP_ACCESS_TOKEN/);
+  assert.match(validateEnvironment({ ...webOnlyEnvironment, WHATSAPP_REQUIRED: "later" }).errors.join(" "), /must be true or false/);
+});
+
 test("WhatsApp interactive replies are extracted and operational logs redact patient content", () => {
   assert.equal(extractIncomingText({ interactive: { button_reply: { title: "Book Appointment", id: "menu_book_appointment" } } }), "menu_book_appointment");
   assert.equal(extractIncomingText({ interactive: { list_reply: { title: "10:30 AM", id: "time:10:30" } } }), "time:10:30");

@@ -70,6 +70,11 @@ export function validateEnvironment(env = process.env) {
   const errors = [];
   const warnings = [];
   const production = env.NODE_ENV === "production";
+  const whatsappRequired = String(env.WHATSAPP_REQUIRED || "false").trim().toLowerCase() === "true";
+
+  if (env.WHATSAPP_REQUIRED && !/^(?:true|false)$/i.test(String(env.WHATSAPP_REQUIRED).trim())) {
+    errors.push("WHATSAPP_REQUIRED must be true or false.");
+  }
 
   Object.entries(NUMERIC_RULES).forEach(([key, [minimum, maximum]]) => {
     if (env[key] === undefined || env[key] === "") return;
@@ -93,9 +98,11 @@ export function validateEnvironment(env = process.env) {
     REQUIRED_PRODUCTION_DEPLOYMENT.forEach((key) => {
       if (looksMissing(env[key] || "")) errors.push(`${key} is required in production.`);
     });
-    CORE_WHATSAPP_KEYS.forEach((key) => {
-      if (looksMissing(env[key] || "")) errors.push(`${key} is required for the production WhatsApp service.`);
-    });
+    if (whatsappRequired) {
+      CORE_WHATSAPP_KEYS.forEach((key) => {
+        if (looksMissing(env[key] || "")) errors.push(`${key} is required when WHATSAPP_REQUIRED=true.`);
+      });
+    }
   }
 
   if (env.MONGODB_URI && !/^mongodb(?:\+srv)?:\/\//i.test(env.MONGODB_URI)) {
@@ -138,7 +145,11 @@ export function validateEnvironment(env = process.env) {
   }
 
   if (!whatsappConfigured(env)) {
-    warnings.push("WhatsApp core configuration is missing. The API will log skipped messages and will not report delivery.");
+    warnings.push(
+      whatsappRequired
+        ? "WhatsApp is required but its core configuration is incomplete."
+        : "WhatsApp core configuration is missing. Web booking remains available, but messages will be skipped until Meta credentials are configured."
+    );
   } else {
     OPTIONAL_WHATSAPP_TEMPLATES.forEach((key) => {
       if (looksMissing(env[key] || "")) {
@@ -152,6 +163,7 @@ export function validateEnvironment(env = process.env) {
     errors,
     warnings,
     checkedAt: new Date().toISOString(),
-    whatsappConfigured: whatsappConfigured(env)
+    whatsappConfigured: whatsappConfigured(env),
+    whatsappRequired
   };
 }

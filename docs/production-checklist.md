@@ -13,6 +13,7 @@
 - [ ] MongoDB connects with a least-privilege account and backup/restore is tested.
 - [x] `npm run setup:clinic` has created one verified active clinic and schedule.
 - [ ] HTTPS, exact CORS origins, long secrets, and Hostinger settings are configured.
+- [ ] `WHATSAPP_REQUIRED=false` is set for web-only launch, or all Meta credentials are present before setting it to `true`.
 - [ ] Meta webhook challenge and signature verification pass.
 - [ ] The production WhatsApp number and approved templates are configured.
 - [x] `npm test`, `npm run test:coverage`, `npm run test:mongodb`, `npm run test:patient-ui`, `npm run check:dummy-content`, `npm run build`, and `npm audit` pass locally.
