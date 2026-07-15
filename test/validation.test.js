@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { VERIFIED_GENERAL_SCHEDULE } from "../server/config/clinic.js";
+import { ensureRuntimeDefaults, PRODUCTION_ORIGIN } from "../server/config/runtime.js";
 import { validateEnvironment } from "../server/config/validation.js";
 import { sanitizeDatabaseError } from "../server/db/connection.js";
 import { extractIncomingText } from "../server/routes/whatsapp.js";
@@ -102,6 +103,26 @@ test("production can launch web booking before Meta setup while strict WhatsApp 
   assert.equal(strictResult.whatsappRequired, true);
   assert.match(strictResult.errors.join(" "), /WHATSAPP_ACCESS_TOKEN/);
   assert.match(validateEnvironment({ ...webOnlyEnvironment, WHATSAPP_REQUIRED: "later" }).errors.join(" "), /must be true or false/);
+});
+
+test("Hostinger production runtime supplies secure and domain-safe defaults", () => {
+  const environment = {
+    NODE_ENV: "production",
+    MONGODB_URI: "mongodb://localhost:27017/clinic"
+  };
+  ensureRuntimeDefaults(environment);
+
+  assert.equal(environment.APP_BASE_URL, PRODUCTION_ORIGIN);
+  assert.equal(environment.CLIENT_BASE_URL, PRODUCTION_ORIGIN);
+  assert.equal(environment.API_BASE_URL, `${PRODUCTION_ORIGIN}/api`);
+  assert.equal(environment.CORS_ALLOWED_ORIGINS, PRODUCTION_ORIGIN);
+  assert.equal(environment.DEFAULT_TIMEZONE, "Asia/Karachi");
+  assert.equal(environment.WHATSAPP_REQUIRED, "false");
+  assert.equal(environment.JWT_ACCESS_SECRET.length, 64);
+  assert.equal(environment.JWT_REFRESH_SECRET.length, 64);
+  assert.equal(environment.COOKIE_SECRET.length, 64);
+  assert.equal(environment.ADMIN_BOOTSTRAP_TOKEN.length, 64);
+  assert.equal(validateEnvironment(environment).ok, true);
 });
 
 test("WhatsApp interactive replies are extracted and operational logs redact patient content", () => {

@@ -6,7 +6,7 @@ import cors from "cors";
 import express from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
-import { ensureDevelopmentDefaults } from "./config/runtime.js";
+import { ensureRuntimeDefaults } from "./config/runtime.js";
 import { validateEnvironment } from "./config/validation.js";
 import { connectDatabase, databaseHealth, disconnectDatabase } from "./db/connection.js";
 import { authenticate } from "./middleware/auth.js";
@@ -26,7 +26,7 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "packa
 export const app = express();
 const port = process.env.PORT && isNaN(Number(process.env.PORT)) ? process.env.PORT : Number(process.env.PORT || 4000);
 let server;
-ensureDevelopmentDefaults();
+ensureRuntimeDefaults();
 let startupValidation = validateEnvironment();
 let databaseDisabled = false;
 
@@ -153,22 +153,31 @@ async function start() {
     throw new Error(`Startup validation failed: ${startupValidation.errors.join(" ")}`);
   }
 
-  const database = await connectDatabase();
-  databaseDisabled = !database.connected;
-  if (database.connected) {
-    await ensureClinicConfiguration();
-  } else {
-    console.warn("MongoDB is not configured yet. API routes will return 503 until MONGODB_URI is provided.");
-  }
-
-  server = app.listen(port, () => {
-    const address = typeof port === "string" ? port : `http://localhost:${port}`;
-    console.log(`Dr. Khurrum Mansoor WhatsApp appointment chatbot API listening on ${address}`);
+  databaseDisabled = true;
+  await new Promise((resolve, reject) => {
+    server = app.listen(port, () => {
+      const address = typeof port === "string" ? port : `http://localhost:${port}`;
+      console.log(`Dr. Khurrum Mansoor WhatsApp appointment chatbot API listening on ${address}`);
+      resolve();
+    });
+    server.once("error", reject);
   });
   server.requestTimeout = Number(process.env.REQUEST_TIMEOUT_MS || 30000);
   server.headersTimeout = Number(process.env.HEADERS_TIMEOUT_MS || 35000);
   server.keepAliveTimeout = Number(process.env.KEEP_ALIVE_TIMEOUT_MS || 5000);
 
+  try {
+    const database = await connectDatabase();
+    databaseDisabled = !database.connected;
+    if (database.connected) {
+      await ensureClinicConfiguration();
+    } else {
+      console.warn("MongoDB is unavailable. The website remains online and API routes will return 503 until the database connection is restored.");
+    }
+  } catch (error) {
+    databaseDisabled = true;
+    console.error("Database initialization failed after the HTTP server started:", error.message);
+  }
 }
 
 async function shutdown(signal, exitCode = 0) {

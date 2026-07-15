@@ -15,6 +15,8 @@
 
 Hostinger must use the repository root, Node.js 20 or newer, `npm run build` as the build command, and `npm start` as the start command. Record the stable commit before deployment. Roll back by redeploying that commit without changing or deleting MongoDB records.
 
+The verified production origin is `https://admin.nighatmedicalcomplex.com`. When URL, CORS, timezone, or authentication-secret variables are absent, the runtime supplies secure launch defaults for this origin. Explicit long authentication secrets remain recommended because generated secrets invalidate staff sessions whenever the Node process restarts. The HTTP listener opens before Atlas initialization so a slow or blocked database connection cannot cause Hostinger's platform-level 503 page; database-backed API routes remain safely unavailable until Atlas connects.
+
 For a web-only Hostinger launch before Meta approval, set `WHATSAPP_REQUIRED=false`. The application will serve patient booking and administration normally while WhatsApp delivery remains disabled. Set it to `true` only after all required Meta credentials have been added.
 
 Minimum Hostinger production variables before Meta setup:
