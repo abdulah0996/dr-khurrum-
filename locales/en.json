@@ -1,0 +1,13 @@
+{
+  "productName": "Dr. Khurrum Mansoor WhatsApp AI Appointment Chatbot",
+  "doctorName": "Dr. Khurrum Mansoor",
+  "contact": "+92 335 7504478",
+  "language": {
+    "english": "English",
+    "urdu": "Urdu"
+  },
+  "chat": {
+    "welcome": "Welcome to Dr. Khurrum Mansoor's WhatsApp Appointment Assistant. Please select an option.",
+    "menu": "Book, check, reschedule, or cancel an appointment through the WhatsApp assistant."
+  }
+}

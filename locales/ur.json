@@ -1,0 +1,13 @@
+{
+  "productName": "Dr. Khurrum Mansoor WhatsApp AI Appointment Chatbot",
+  "doctorName": "ڈاکٹر خرم منصور",
+  "contact": "\u2066+92 335 7504478\u2069",
+  "language": {
+    "english": "English",
+    "urdu": "اردو"
+  },
+  "chat": {
+    "welcome": "ڈاکٹر خرم منصور کے واٹس ایپ اپائنٹمنٹ اسسٹنٹ میں خوش آمدید۔ براہِ کرم ایک آپشن منتخب کریں۔",
+    "menu": "واٹس ایپ اسسٹنٹ کے ذریعے اپائنٹمنٹ بک، چیک، تبدیل یا منسوخ کریں۔"
+  }
+}

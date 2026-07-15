@@ -1,0 +1,45 @@
+{
+  "name": "dr-khurrum-whatsapp-appointment-chatbot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Secure bilingual WhatsApp appointment chatbot for Dr. Khurrum Mansoor.",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "client": "vite --host 0.0.0.0",
+    "server": "node server/index.js",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "start": "node server/index.js",
+    "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage",
+    "test:mongodb": "node scripts/mongodb-integration-check.js",
+    "test:patient-ui": "node scripts/patient-ui-check.js",
+    "check:dummy-content": "node scripts/check-dummy-content.js",
+    "setup:clinic": "node scripts/setup-clinic.js"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.1.1",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.2.1",
+    "helmet": "^8.1.0",
+    "i18next": "^26.3.1",
+    "jsonwebtoken": "^9.0.2",
+    "lucide-react": "^0.561.0",
+    "mongoose": "^9.0.1",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "react-i18next": "^17.0.8",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.3",
+    "vite": "^7.2.6"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  }
+}
