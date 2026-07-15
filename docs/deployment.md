@@ -13,7 +13,7 @@
 11. Add approved WhatsApp utility template names.
 12. Test booking, lookup, reschedule, cancel, opt-out, reminders, and WhatsApp logs.
 
-Hostinger must use the repository root, Node.js 20 or newer, `npm run build` as the build command, and `npm start` as the start command. Record the stable commit before deployment. Roll back by redeploying that commit without changing or deleting MongoDB records.
+Hostinger must use the repository root, Node.js 20 or newer, `npm run build` as the build command, `npm start` as the start command, and root `index.js` as the entry file. Record the stable commit before deployment. Roll back by redeploying that commit without changing or deleting MongoDB records.
 
 The verified production origin is `https://admin.nighatmedicalcomplex.com`. When URL, CORS, timezone, or authentication-secret variables are absent, the runtime supplies secure launch defaults for this origin. Explicit long authentication secrets remain recommended because generated secrets invalidate staff sessions whenever the Node process restarts. The HTTP listener opens before Atlas initialization so a slow or blocked database connection cannot cause Hostinger's platform-level 503 page; database-backed API routes remain safely unavailable until Atlas connects.
 

@@ -15,6 +15,7 @@ ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
+COPY index.js ./index.js
 COPY server ./server
 COPY locales ./locales
 EXPOSE 4000
