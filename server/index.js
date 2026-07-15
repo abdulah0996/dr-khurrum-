@@ -150,7 +150,9 @@ async function start() {
   startupValidation = validateEnvironment();
   startupValidation.warnings.forEach((warning) => console.warn(warning));
   if (!startupValidation.ok) {
-    throw new Error(`Startup validation failed: ${startupValidation.errors.join(" ")}`);
+    console.error(
+      `Startup configuration is incomplete. The website will remain online while affected API features stay unavailable: ${startupValidation.errors.join(" ")}`
+    );
   }
 
   databaseDisabled = true;
