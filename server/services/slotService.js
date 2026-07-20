@@ -126,6 +126,12 @@ export function tokenNumberForTime(schedule, date, time) {
   return index < 0 ? null : index + 1;
 }
 
+export function appointmentOccupyingSlot(appointments = [], time, tokenNumber) {
+  return appointments.find(
+    (appointment) => appointment.time === time || Number(appointment.tokenNumber) === Number(tokenNumber)
+  );
+}
+
 export async function getAvailability({ locationId, date, includeUnavailable = true, excludeAppointmentId = "" }) {
   const location = await getLocation(locationId);
   if (!location) {
@@ -160,14 +166,17 @@ export async function getAvailability({ locationId, date, includeUnavailable = t
     status: { $in: ["Booked", "Rescheduled"] }
   }).lean();
 
-  const bookedByTime = new Map(booked.map((appointment) => [appointment.time, appointment]));
   const atDailyCapacity = booked.length >= Number(effectiveSchedule.dailyLimit || 200);
   const today = todayIso(schedule?.timezone || TIMEZONE);
   const now = currentTimeHHMM(schedule?.timezone || TIMEZONE);
 
-  const slots = baseSlots.map((time) => {
+  const slots = baseSlots.map((time, index) => {
+    const tokenNumber = index + 1;
     const blocked = blocks.find((block) => isWithinBlockedRange(time, block, Number(effectiveSchedule.slotDurationMinutes || 15)));
-    const bookedAppointment = bookedByTime.get(time);
+    // A schedule change can move a token to a new time while an existing
+    // active appointment still owns that token. Check both constraints so the
+    // API never advertises a slot that MongoDB must reject.
+    const bookedAppointment = appointmentOccupyingSlot(booked, time, tokenNumber);
     const cutoff = Date.parse(`${date}T00:00:00.000Z`) < Date.parse(`${today}T00:00:00.000Z`) || (date === today && isInsideSameDayCutoff(time, now));
     const available = !blocked && !bookedAppointment && !cutoff && !atDailyCapacity;
     let reason = "";
@@ -178,7 +187,7 @@ export async function getAvailability({ locationId, date, includeUnavailable = t
 
     return {
       time,
-      tokenNumber: baseSlots.indexOf(time) + 1,
+      tokenNumber,
       available,
       status: available ? "Available" : bookedAppointment ? "Booked" : blocked ? "Blocked" : "Unavailable",
       reason

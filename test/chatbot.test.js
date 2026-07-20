@@ -9,6 +9,7 @@ import {
   isInsideSameDayCutoff,
   isWithinAdvanceWindow,
   minutesUntilLocalAppointment,
+  appointmentOccupyingSlot,
   tokenNumberForTime
 } from "../server/services/slotService.js";
 import { validateEnvironment, whatsappConfigured } from "../server/config/validation.js";
@@ -105,6 +106,16 @@ test("database indexes prevent duplicate active time slots and tokens", () => {
   assert.ok(indexes.some(({ keys, options }) => keys.locationId === 1 && keys.date === 1 && keys.time === 1 && options.unique));
   assert.ok(indexes.some(({ keys, options }) => keys.locationId === 1 && keys.date === 1 && keys.tokenNumber === 1 && options.unique));
   assert.ok(indexes.some(({ keys, options }) => keys.patientId === 1 && keys.date === 1 && options.unique));
+});
+
+test("availability treats both an occupied time and an occupied token as booked", () => {
+  const appointments = [
+    { appointmentId: "APT-OLD", time: "10:45", tokenNumber: 8, status: "Booked" }
+  ];
+
+  assert.equal(appointmentOccupyingSlot(appointments, "10:45", 12)?.appointmentId, "APT-OLD");
+  assert.equal(appointmentOccupyingSlot(appointments, "10:10", 8)?.appointmentId, "APT-OLD");
+  assert.equal(appointmentOccupyingSlot(appointments, "11:00", 13), undefined);
 });
 
 test("profile, clinic, reception, confirmation, and emergency content is bilingual", () => {
