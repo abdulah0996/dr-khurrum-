@@ -7,6 +7,7 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { ensureRuntimeDefaults } from "./config/runtime.js";
+import { parseTrustProxy } from "./config/trustProxy.js";
 import { validateEnvironment } from "./config/validation.js";
 import { connectDatabase, databaseHealth, disconnectDatabase } from "./db/connection.js";
 import { authenticate } from "./middleware/auth.js";
@@ -44,10 +45,9 @@ const generalLimiter = rateLimit({
   limit: Number(process.env.RATE_LIMIT_MAX || 300),
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => req.path.startsWith("/api/whatsapp/webhook")
+  skip: (req) => req.path.startsWith("/api/whatsapp/webhook") || req.path === "/api/auth/login"
 });
 
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false });
 const chatLimiter = rateLimit({ windowMs: 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false });
 const bookingLimiter = rateLimit({ windowMs: 60 * 1000, limit: 12, standardHeaders: true, legacyHeaders: false });
 const lookupLimiter = rateLimit({ windowMs: 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false });
@@ -56,7 +56,7 @@ const sendLimiter = rateLimit({ windowMs: 60 * 1000, limit: 20, standardHeaders:
 const adminLimiter = rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: true, legacyHeaders: false });
 
 app.disable("x-powered-by");
-app.set("trust proxy", Number(process.env.TRUST_PROXY || 1));
+app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY || "1"));
 app.use(requestId);
 app.use(
   helmet({
@@ -110,7 +110,7 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
-app.use("/api/auth", authLimiter, authRoutes);
+app.use("/api/auth", authRoutes);
 app.use("/api/public/chat", chatLimiter);
 app.use("/api/public", publicRoutes);
 app.use("/api/whatsapp/webhook", webhookLimiter);

@@ -81,6 +81,7 @@ async function readJson(response) {
   if (!response.ok) {
     const error = new Error(payload?.message || payload || "Request failed.");
     error.details = payload?.details;
+    error.status = response.status;
     throw error;
   }
   return payload;
@@ -327,16 +328,20 @@ function LoginScreen({ onSubmit }) {
   const [form, setForm] = useState({ email: "", password: "" });
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
 
   const submit = async (event) => {
     event.preventDefault();
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setError("");
     setSubmitting(true);
     try {
       await onSubmit(form);
     } catch (err) {
-      setError(err.message);
+      setError(err.status === 401 || err.status === 429 ? err.message : "We could not sign you in right now. Please try again.");
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };

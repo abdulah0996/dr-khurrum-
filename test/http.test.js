@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import bcrypt from "bcryptjs";
 import { signAccessToken } from "../server/middleware/auth.js";
 import { models } from "../server/models/index.js";
 
@@ -97,13 +98,12 @@ test("health endpoint remains responsive under a controlled 50-request burst", a
   assert.ok(elapsedMs < 5000, `Health burst took ${Math.round(elapsedMs)}ms`);
 });
 
-test("authentication and request-body abuse controls reject repeated and oversized requests", async () => {
+test("session checks do not consume password-login limits and oversized bodies are rejected", async () => {
   const attempts = [];
-  for (let index = 0; index < 21; index += 1) {
+  for (let index = 0; index < 25; index += 1) {
     attempts.push(await fetch(`${baseUrl}/api/auth/me`));
   }
-  assert.equal(attempts.slice(0, 20).every((response) => response.status === 401), true);
-  assert.equal(attempts[20].status, 429);
+  assert.equal(attempts.every((response) => response.status === 401), true);
 
   const oversized = await fetch(`${baseUrl}/api/whatsapp/webhook`, {
     method: "POST",
@@ -111,6 +111,96 @@ test("authentication and request-body abuse controls reject repeated and oversiz
     body: JSON.stringify({ value: "x".repeat(513 * 1024) })
   });
   assert.equal(oversized.status, 413);
+});
+
+test("unknown accounts receive the safe response and only the eleventh failed login is rate limited", async () => {
+  const originalFindOne = models.User.findOne;
+  const originalAuditCreate = models.AuditLog.create;
+  models.User.findOne = async () => null;
+  models.AuditLog.create = async (entry) => entry;
+  try {
+    for (let attempt = 1; attempt <= 10; attempt += 1) {
+      const response = await fetch(`${baseUrl}/api/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.31" },
+        body: JSON.stringify({ email: "missing@example.invalid", password: "wrong" })
+      });
+      assert.equal(response.status, 401);
+      assert.equal((await response.json()).message, "Email or password is incorrect.");
+    }
+
+    const blocked = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.31" },
+      body: JSON.stringify({ email: "missing@example.invalid", password: "wrong" })
+    });
+    assert.equal(blocked.status, 429);
+    assert.ok(Number(blocked.headers.get("retry-after")) > 0);
+    assert.match((await blocked.json()).message, /unsuccessful sign-in attempts/i);
+  } finally {
+    models.User.findOne = originalFindOne;
+    models.AuditLog.create = originalAuditCreate;
+  }
+});
+
+test("successful login atomically resets failures and logout/relogin works immediately", async () => {
+  const originalFindOne = models.User.findOne;
+  const originalUpdateOne = models.User.updateOne;
+  const originalAuditCreate = models.AuditLog.create;
+  const updates = [];
+  const user = {
+    userId: "USR-AUTH-RATE-QA",
+    name: "Rate Limit QA",
+    email: "rate-limit-qa@example.invalid",
+    passwordHash: await bcrypt.hash("Correct-Password-42!", 4),
+    role: "Super Admin",
+    status: "Active",
+    failedLoginAttempts: 4
+  };
+  models.User.findOne = (filter) => filter.userId
+    ? { lean: async () => user }
+    : Promise.resolve(user);
+  models.User.updateOne = async (...args) => { updates.push(args); return { acknowledged: true }; };
+  models.AuditLog.create = async (entry) => entry;
+
+  const requestLogin = (password) => fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.32" },
+    body: JSON.stringify({ email: " RATE-LIMIT-QA@example.invalid ", password })
+  });
+
+  try {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      assert.equal((await requestLogin("wrong")).status, 401);
+    }
+    const successful = await requestLogin("Correct-Password-42!");
+    assert.equal(successful.status, 200);
+    const payload = await successful.json();
+    const resetUpdate = updates.find(([, update]) => update?.$set?.failedLoginAttempts === 0);
+    assert.ok(resetUpdate);
+    assert.deepEqual(resetUpdate[1].$unset, { lockUntil: 1, lastFailedLoginAt: 1 });
+
+    const logout = await fetch(`${baseUrl}/api/auth/logout`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${payload.token}` }
+    });
+    assert.equal(logout.status, 200);
+    assert.equal((await requestLogin("Correct-Password-42!")).status, 200);
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      assert.equal((await requestLogin("wrong")).status, 401);
+    }
+    const blocked = await requestLogin("wrong");
+    assert.equal(blocked.status, 429);
+    assert.ok(Number(blocked.headers.get("retry-after")) > 0);
+
+    const failedUpdate = updates.find(([, update]) => Array.isArray(update));
+    assert.equal(failedUpdate[1].length, 2);
+  } finally {
+    models.User.findOne = originalFindOne;
+    models.User.updateOne = originalUpdateOne;
+    models.AuditLog.create = originalAuditCreate;
+  }
 });
 
 test("public clinic information omits internal pending qualifications", async () => {

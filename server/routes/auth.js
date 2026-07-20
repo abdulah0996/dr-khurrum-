@@ -2,13 +2,15 @@ import bcrypt from "bcryptjs";
 import { Router } from "express";
 import { models } from "../models/index.js";
 import { publicUser, signAccessToken, authenticate } from "../middleware/auth.js";
+import { bootstrapLimiter, loginLimiters, resetAccountFailureLimit } from "../middleware/loginRateLimit.js";
 import { addAuditLog } from "../services/auditService.js";
 import { bootstrapSchema, loginSchema } from "../utils/validation.js";
 import { makePublicId } from "../utils/time.js";
 
 const router = Router();
-const LOCK_AFTER = 5;
+const LOCK_AFTER = 10;
 const LOCK_MINUTES = 15;
+const LOCK_WINDOW_MS = LOCK_MINUTES * 60 * 1000;
 
 router.get("/bootstrap/status", async (_req, res, next) => {
   try {
@@ -19,7 +21,7 @@ router.get("/bootstrap/status", async (_req, res, next) => {
   }
 });
 
-router.post("/bootstrap", async (req, res, next) => {
+router.post("/bootstrap", bootstrapLimiter, async (req, res, next) => {
   try {
     const parsed = bootstrapSchema.parse(req.body);
     if (parsed.token !== process.env.ADMIN_BOOTSTRAP_TOKEN) {
@@ -48,34 +50,96 @@ router.post("/bootstrap", async (req, res, next) => {
   }
 });
 
-router.post("/login", async (req, res, next) => {
+router.post("/login", ...loginLimiters, async (req, res, next) => {
   try {
     const parsed = loginSchema.parse(req.body);
     const user = await models.User.findOne({ email: parsed.email });
     const locked = user?.lockUntil && user.lockUntil.getTime() > Date.now();
 
-    if (!user || user.status !== "Active" || locked || !(await bcrypt.compare(parsed.password, user.passwordHash))) {
-      if (user && !locked) {
-        const failedLoginAttempts = Number(user.failedLoginAttempts || 0) + 1;
-        const lockUntil = failedLoginAttempts >= LOCK_AFTER ? new Date(Date.now() + LOCK_MINUTES * 60 * 1000) : undefined;
-        await models.User.updateOne({ userId: user.userId }, { failedLoginAttempts, ...(lockUntil ? { lockUntil } : {}) });
-      }
+    if (!user || user.status !== "Active") {
       await addAuditLog({
         actor: user || null,
         action: "Admin login failure",
         module: "Auth",
         targetType: "User",
         targetId: user?.userId || parsed.email,
-        metadata: { locked: Boolean(locked) },
+        metadata: { locked: false },
         req
       });
-      return res.status(401).json({ message: locked ? "Account is temporarily locked. Please try again later." : "Invalid email or password." });
+      return res.status(401).json({ message: "Email or password is incorrect." });
     }
 
+    if (locked) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((user.lockUntil.getTime() - Date.now()) / 1000));
+      const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
+      res.setHeader("Retry-After", String(retryAfterSeconds));
+      await addAuditLog({
+        actor: user,
+        action: "Admin login failure",
+        module: "Auth",
+        targetType: "User",
+        targetId: user.userId,
+        metadata: { locked: true },
+        req
+      });
+      return res.status(429).json({
+        message: `Too many unsuccessful sign-in attempts. Please wait ${minutes} minute${minutes === 1 ? "" : "s"} and try again.`
+      });
+    }
+
+    if (!(await bcrypt.compare(parsed.password, user.passwordHash))) {
+      const now = new Date();
+      const windowStart = new Date(now.getTime() - LOCK_WINDOW_MS);
+      await models.User.updateOne(
+        { userId: user.userId },
+        [{
+          $set: {
+            failedLoginAttempts: {
+              $cond: [
+                { $gte: [{ $ifNull: ["$lastFailedLoginAt", new Date(0)] }, windowStart] },
+                { $add: [{ $ifNull: ["$failedLoginAttempts", 0] }, 1] },
+                1
+              ]
+            },
+            lastFailedLoginAt: now
+          }
+        }, {
+          $set: {
+            lockUntil: {
+              $cond: [
+                { $gte: ["$failedLoginAttempts", LOCK_AFTER] },
+                new Date(now.getTime() + LOCK_WINDOW_MS),
+                "$lockUntil"
+              ]
+            }
+          }
+        }]
+      );
+      await addAuditLog({
+        actor: user,
+        action: "Admin login failure",
+        module: "Auth",
+        targetType: "User",
+        targetId: user.userId,
+        metadata: { locked: false },
+        req
+      });
+      return res.status(401).json({ message: "Email or password is incorrect." });
+    }
+
+    const loggedInAt = new Date();
+    await models.User.updateOne(
+      { userId: user.userId },
+      {
+        $set: { failedLoginAttempts: 0, lastLoginAt: loggedInAt },
+        $unset: { lockUntil: 1, lastFailedLoginAt: 1 }
+      }
+    );
     user.failedLoginAttempts = 0;
     user.lockUntil = undefined;
-    user.lastLoginAt = new Date();
-    await user.save();
+    user.lastFailedLoginAt = undefined;
+    user.lastLoginAt = loggedInAt;
+    resetAccountFailureLimit(req, res);
     await addAuditLog({ actor: user, action: "Admin login success", module: "Auth", targetType: "User", targetId: user.userId, req });
 
     const token = signAccessToken(user);

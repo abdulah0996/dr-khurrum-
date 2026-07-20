@@ -23,6 +23,7 @@ export const UserSchema = new mongoose.Schema(
     role: { type: String, enum: STAFF_ROLES, required: true, index: true },
     status: { type: String, enum: ["Active", "Inactive"], default: "Active", index: true },
     failedLoginAttempts: { type: Number, default: 0 },
+    lastFailedLoginAt: Date,
     lockUntil: Date,
     lastLoginAt: Date
   },
