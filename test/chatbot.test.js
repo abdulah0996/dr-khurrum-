@@ -144,6 +144,7 @@ test("profile, clinic, reception, confirmation, and emergency content is bilingu
   assert.match(confirmation, /Patient: Patient Name/);
   assert.match(confirmation, /Appointment ID: KHR-20260716-ABC123/);
   assert.match(confirmation, /Save this ID/);
+  assert.match(confirmation, /does not arrive within 15 minutes of the scheduled token time, the appointment will be cancelled/);
 });
 
 test("patient names allow multilingual letters and reject numbers or symbols only", () => {

@@ -259,6 +259,7 @@ export function appointmentConfirmation(appointment, language = "en") {
       `مریض کا نام: ${appointment.patientName}`,
       "",
       "براہِ کرم مقررہ وقت سے کم از کم 10 منٹ پہلے پہنچیں۔",
+      "اگر مریض مقررہ ٹوکن وقت کے 15 منٹ کے اندر نہ پہنچے تو اپائنٹمنٹ منسوخ کر دی جائے گی۔",
       "",
       contactLine(language)
     ].join("\n");
@@ -277,6 +278,7 @@ export function appointmentConfirmation(appointment, language = "en") {
     `Patient: ${appointment.patientName}`,
     "",
     "Please arrive at least 10 minutes before your scheduled time.",
+    "If the patient does not arrive within 15 minutes of the scheduled token time, the appointment will be cancelled.",
     "",
     contactLine(language)
   ].join("\n");
