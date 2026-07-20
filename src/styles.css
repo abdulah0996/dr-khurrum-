@@ -228,6 +228,7 @@ td small {
 
 .primary-button,
 .send-button,
+.danger-button,
 .ghost-link,
 .ghost-button,
 .icon-button,
@@ -252,6 +253,24 @@ td small {
   color: #fff;
   padding: 10px 15px;
   box-shadow: 0 10px 24px rgba(15, 118, 110, 0.18);
+}
+
+.danger-button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid #b91c1c;
+  border-radius: 8px;
+  background: var(--red);
+  color: #fff;
+  padding: 8px 12px;
+  font-weight: 850;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: #b91c1c;
 }
 
 .primary-button:hover,

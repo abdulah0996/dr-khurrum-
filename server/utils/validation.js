@@ -100,6 +100,13 @@ export const adminStatusSchema = z
     }
   });
 
+export const appointmentBulkDeleteSchema = z
+  .object({
+    appointmentIds: z.array(z.string().trim().min(6).max(40)).min(1).max(100)
+  })
+  .strict()
+  .transform((value) => ({ appointmentIds: [...new Set(value.appointmentIds)] }));
+
 export const loginSchema = z
   .object({
     email: z.string().trim().toLowerCase().email(),

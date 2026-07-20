@@ -9,7 +9,7 @@ import { generateScheduleSlots, isWithinAdvanceWindow } from "../server/services
 import { messageBodyForLog, sanitizeMessageLog } from "../server/services/whatsappService.js";
 import { getMetricsSnapshot, recordMetric, resetMetrics } from "../server/services/monitoringService.js";
 import { toMinutes } from "../server/utils/time.js";
-import { adminStatusSchema, blockedSlotSchema, dateSchema, isValidPatientName, scheduleSchema, timeSchema } from "../server/utils/validation.js";
+import { adminStatusSchema, appointmentBulkDeleteSchema, blockedSlotSchema, dateSchema, isValidPatientName, scheduleSchema, timeSchema } from "../server/utils/validation.js";
 
 function completeProductionEnvironment(overrides = {}) {
   return {
@@ -136,6 +136,16 @@ test("Hostinger production runtime supplies domain defaults but never generates 
   const validation = validateEnvironment(environment);
   assert.equal(validation.ok, false);
   assert.match(validation.errors.join(" "), /JWT_ACCESS_SECRET/);
+});
+
+test("bulk appointment deletion requires a bounded unique ID selection", () => {
+  assert.equal(appointmentBulkDeleteSchema.safeParse({ appointmentIds: [] }).success, false);
+  assert.equal(appointmentBulkDeleteSchema.safeParse({ appointmentIds: ["short"] }).success, false);
+  assert.equal(appointmentBulkDeleteSchema.safeParse({ appointmentIds: Array.from({ length: 101 }, (_, index) => `KHR-20260720-${String(index).padStart(6, "0")}`) }).success, false);
+  assert.deepEqual(
+    appointmentBulkDeleteSchema.parse({ appointmentIds: ["KHR-20260720-ABC123", "KHR-20260720-ABC123"] }),
+    { appointmentIds: ["KHR-20260720-ABC123"] }
+  );
 });
 
 test("Hostinger production runtime pins the verified public origin", () => {

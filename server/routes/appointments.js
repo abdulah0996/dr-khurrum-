@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   cancelAppointment,
   createAppointment,
+  deleteAppointments,
   getAppointmentById,
   listAppointments,
   listAppointmentsPage,
@@ -15,7 +16,7 @@ import { DOCTOR } from "../config/clinic.js";
 import { requireRole } from "../middleware/auth.js";
 import { retryAdminAppointmentAlert } from "../services/adminAlertService.js";
 import { addAuditLogSafely } from "../services/auditService.js";
-import { adminStatusSchema, appointmentCancelSchema, appointmentCreateSchema, appointmentLookupSchema, appointmentRescheduleSchema } from "../utils/validation.js";
+import { adminStatusSchema, appointmentBulkDeleteSchema, appointmentCancelSchema, appointmentCreateSchema, appointmentLookupSchema, appointmentRescheduleSchema } from "../utils/validation.js";
 
 const router = Router();
 
@@ -30,6 +31,15 @@ function appointmentReminder(appointment, language = "en") {
 router.get("/", async (req, res, next) => {
   try {
     res.json(await listAppointmentsPage(req.query));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete("/", requireRole("Super Admin"), async (req, res, next) => {
+  try {
+    const parsed = appointmentBulkDeleteSchema.parse(req.body);
+    res.json(await deleteAppointments(parsed.appointmentIds, req.user, req));
   } catch (error) {
     next(error);
   }

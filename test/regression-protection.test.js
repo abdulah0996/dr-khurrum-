@@ -77,6 +77,10 @@ test("frontend preserves section data, paginates appointments, and rotates refre
   assert.match(source, /appointments: current\.appointments/);
   assert.match(source, /appointmentPagination/);
   assert.match(source, />Previous<.*>Next</s);
+  assert.match(source, /page: String\(page\), limit: "10"/);
+  assert.match(source, /Delete Selected/);
+  assert.match(source, /Permanently delete/);
+  assert.match(source, /method: "DELETE"/);
   assert.match(source, /new AbortController\(\)/);
   assert.match(source, /requestRef\.current\.sequence/);
   assert.match(source, /loadAllToday/);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import mongoose from "mongoose";
 import { VERIFIED_CLINIC, VERIFIED_GENERAL_SCHEDULE } from "../server/config/clinic.js";
 import { models } from "../server/models/index.js";
-import { cancelAppointment, createAppointment, rescheduleAppointment, toPublicAppointment, updateAppointmentStatus } from "../server/services/appointmentService.js";
+import { cancelAppointment, createAppointment, deleteAppointments, rescheduleAppointment, toPublicAppointment, updateAppointmentStatus } from "../server/services/appointmentService.js";
 import { addDaysIso, dayName, todayIso } from "../server/utils/time.js";
 
 const originals = {
@@ -15,7 +15,8 @@ const originals = {
     find: models.Appointment.find,
     findOne: models.Appointment.findOne,
     findOneAndUpdate: models.Appointment.findOneAndUpdate,
-    create: models.Appointment.create
+    create: models.Appointment.create,
+    deleteMany: models.Appointment.deleteMany
   },
   Patient: {
     findOne: models.Patient.findOne,
@@ -23,6 +24,7 @@ const originals = {
     create: models.Patient.create
   },
   WhatsAppConsent: { findOneAndUpdate: models.WhatsAppConsent.findOneAndUpdate },
+  NotificationOutbox: { deleteMany: models.NotificationOutbox.deleteMany },
   AuditLog: { create: models.AuditLog.create }
 };
 
@@ -354,4 +356,29 @@ test("an explicit patientId reuses only a patient belonging to the same normaliz
     }),
     (error) => error.status === 409 && /does not belong/i.test(error.message)
   );
+});
+
+test("bulk deletion removes only selected appointments and their pending admin alerts", async () => {
+  const selected = ["KHR-20260720-ONE001", "KHR-20260720-TWO002"];
+  let appointmentDeleteFilter;
+  let alertDeleteFilter;
+  models.Appointment.find = () => ({
+    select() { return this; },
+    session() { return this; },
+    async lean() { return selected.map((appointmentId) => ({ appointmentId })); }
+  });
+  models.Appointment.deleteMany = async (filter) => {
+    appointmentDeleteFilter = filter;
+    return { deletedCount: 2 };
+  };
+  models.NotificationOutbox.deleteMany = async (filter) => {
+    alertDeleteFilter = filter;
+    return { deletedCount: 1 };
+  };
+
+  const result = await deleteAppointments(selected, { role: "Super Admin", userId: "USR-QA" });
+
+  assert.deepEqual(appointmentDeleteFilter, { appointmentId: { $in: selected } });
+  assert.deepEqual(alertDeleteFilter, { appointmentId: { $in: selected } });
+  assert.deepEqual(result, { requestedCount: 2, deletedCount: 2, missingCount: 0 });
 });

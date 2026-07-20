@@ -22,6 +22,7 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  Trash2,
   UserRound,
   UserPlus,
   Users,
@@ -37,7 +38,7 @@ const initialData = {
   settings: null,
   appointments: [],
   todaysAppointments: [],
-  appointmentPagination: { page: 1, limit: 50, total: 0, totalPages: 1, hasNext: false, hasPrevious: false },
+  appointmentPagination: { page: 1, limit: 10, total: 0, totalPages: 1, hasNext: false, hasPrevious: false },
   blockedSlots: [],
   specialSchedules: [],
   messageLogs: [],
@@ -194,7 +195,7 @@ function AdminApp() {
       return { records, truncated: true };
     };
     const appointmentBatch = skipAppointments ? [] : [
-      api("/appointments?page=1&limit=50"),
+      api("/appointments?page=1&limit=10"),
       loadAllToday()
     ];
     const appointmentsRequest = Promise.allSettled(appointmentBatch)
@@ -371,7 +372,7 @@ function AdminApp() {
         <section className="content">
           {Object.values(sectionErrors).some(Boolean) && <div className="form-error" role="alert">{Object.values(sectionErrors).filter(Boolean).join(" ")} Previously loaded records are still shown. <button type="button" className="ghost-button" onClick={loadData}>Retry</button></div>}
           {view === "today" && <TodayView appointments={data.todaysAppointments} loading={appointmentsLoading} />}
-          {view === "appointments" && <AppointmentsView appointments={data.appointments} initialPagination={data.appointmentPagination} loading={appointmentsLoading} api={api} refresh={loadData} flash={flash} />}
+          {view === "appointments" && <AppointmentsView appointments={data.appointments} initialPagination={data.appointmentPagination} loading={appointmentsLoading} api={api} refresh={loadData} flash={flash} canDelete={user?.role === "Super Admin"} />}
           {view === "add" && <AddAppointmentView settings={data.settings} api={api} refresh={loadData} flash={flash} />}
           {view === "calendar" && <AvailabilityCalendarView settings={data.settings} api={api} />}
           {view === "doctor" && <DoctorProfileView settings={data.settings} api={api} refresh={loadData} flash={flash} />}
@@ -545,7 +546,7 @@ function Stat({ icon: Icon, label, value, tone = "" }) {
   );
 }
 
-function AppointmentsView({ appointments, initialPagination, loading, api, refresh, flash }) {
+function AppointmentsView({ appointments, initialPagination, loading, api, refresh, flash, canDelete = false }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [reschedule, setReschedule] = useState(null);
@@ -557,6 +558,7 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
   const [pagination, setPagination] = useState(initialPagination);
   const [pageLoading, setPageLoading] = useState(false);
   const [pageError, setPageError] = useState("");
+  const [selectedIds, setSelectedIds] = useState([]);
   const requestRef = useRef({ sequence: 0, controller: null });
   const skipInitialSearchRef = useRef(true);
 
@@ -571,7 +573,7 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
     setPageLoading(true);
     setPageError("");
     try {
-      const params = new URLSearchParams({ page: String(page), limit: "50" });
+      const params = new URLSearchParams({ page: String(page), limit: "10" });
       if (q.trim()) params.set("q", q.trim());
       if (status) params.set("status", status);
       if (requiresOnly) params.set("requiresReschedule", "true");
@@ -579,6 +581,7 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
       if (requestRef.current.sequence !== sequence) return;
       setRecords(result.appointments || []);
       setPagination(result.pagination || initialPagination);
+      setSelectedIds([]);
     } catch (error) {
       if (error?.name !== "AbortError" && requestRef.current.sequence === sequence) {
         setPageError(error.message || "Appointments could not be loaded. Please retry.");
@@ -619,10 +622,14 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
       return;
     }
     setActionLoading(appointment.appointmentId);
+    setPageError("");
     try {
       await api(`/appointments/${appointment.appointmentId}/status`, { method: "POST", body: { status: nextStatus, ...(reason ? { reason: reason.trim() } : {}) } });
-      await Promise.allSettled([refresh({ skipAppointments: true }), loadPage(pagination.page)]);
+      await refresh();
+      await loadPage(pagination.page);
       flash(`Appointment marked ${nextStatus}.`);
+    } catch (error) {
+      setPageError(error.message || `Appointment could not be marked ${nextStatus}.`);
     } finally {
       setActionLoading("");
     }
@@ -633,6 +640,7 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
     if (!noShowCandidate || noShowReason.trim().length < 3) return;
     const appointment = noShowCandidate;
     setActionLoading(appointment.appointmentId);
+    setPageError("");
     try {
       await api(`/appointments/${appointment.appointmentId}/status`, {
         method: "POST",
@@ -640,8 +648,11 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
       });
       setNoShowCandidate(null);
       setNoShowReason("");
-      await Promise.allSettled([refresh({ skipAppointments: true }), loadPage(pagination.page)]);
+      await refresh();
+      await loadPage(pagination.page);
       flash("Appointment marked No-Show.");
+    } catch (error) {
+      setPageError(error.message || "Appointment could not be marked No-Show.");
     } finally {
       setActionLoading("");
     }
@@ -652,13 +663,17 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
     if (!reason) return;
     if (!window.confirm(`Cancel ${appointment.appointmentId}? The record will be preserved and the slot released.`)) return;
     setActionLoading(appointment.appointmentId);
+    setPageError("");
     try {
       await api("/appointments/cancel", {
         method: "POST",
         body: { appointmentId: appointment.appointmentId, phone: appointment.normalizedPhone, reason }
       });
-      await Promise.allSettled([refresh({ skipAppointments: true }), loadPage(pagination.page)]);
+      await refresh();
+      await loadPage(pagination.page);
       flash("Appointment cancelled.");
+    } catch (error) {
+      setPageError(error.message || "Appointment could not be cancelled.");
     } finally {
       setActionLoading("");
     }
@@ -671,6 +686,42 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
       await api(`/appointments/${appointment.appointmentId}/admin-alert/retry`, { method: "POST" });
       await loadPage(pagination.page);
       flash("Personal WhatsApp alert queued for retry.");
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const toggleSelected = (appointmentId) => {
+    setSelectedIds((current) => current.includes(appointmentId)
+      ? current.filter((id) => id !== appointmentId)
+      : [...current, appointmentId]);
+  };
+
+  const toggleAllVisible = () => {
+    const visibleIds = filtered.map((appointment) => appointment.appointmentId);
+    const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));
+    setSelectedIds(allSelected ? [] : visibleIds);
+  };
+
+  const deleteSelected = async () => {
+    if (!canDelete || !selectedIds.length) return;
+    const count = selectedIds.length;
+    const confirmed = window.confirm(
+      `Permanently delete ${count} selected appointment${count === 1 ? "" : "s"}?\n\nThis cannot be undone. Any active slots will be released. Audit and sent-message logs will be preserved.`
+    );
+    if (!confirmed) return;
+    setActionLoading("bulk-delete");
+    setPageError("");
+    try {
+      const result = await api("/appointments", { method: "DELETE", body: { appointmentIds: selectedIds } });
+      setSelectedIds([]);
+      const remaining = Math.max(0, (pagination.total || 0) - (result.deletedCount || 0));
+      const targetPage = Math.min(pagination.page || 1, Math.max(1, Math.ceil(remaining / (pagination.limit || 10))));
+      await refresh();
+      await loadPage(targetPage);
+      flash(`${result.deletedCount || 0} appointment${result.deletedCount === 1 ? "" : "s"} deleted.`);
+    } catch (error) {
+      setPageError(error.message || "Selected appointments could not be deleted.");
     } finally {
       setActionLoading("");
     }
@@ -697,13 +748,22 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
         <div className="panel-heading">
           <div>
             <h2>Appointments</h2>
-            <p>{filtered.length} record(s)</p>
+            <p>{pagination?.total || 0} matching record(s) · {filtered.length} on this page</p>
           </div>
+          {canDelete && (
+            <button type="button" className="danger-button" disabled={!selectedIds.length || Boolean(actionLoading)} onClick={deleteSelected}>
+              <Trash2 size={16} /> Delete Selected{selectedIds.length ? ` (${selectedIds.length})` : ""}
+            </button>
+          )}
         </div>
         {pageError && <div className="form-error" role="alert">{pageError} <button type="button" className="ghost-button" onClick={() => loadPage(pagination?.page || 1).catch(() => {})}>Retry</button></div>}
         <AppointmentTable
           appointments={filtered}
           loading={loading || pageLoading}
+          selectable={canDelete}
+          selectedIds={selectedIds}
+          onToggle={toggleSelected}
+          onToggleAll={toggleAllVisible}
           actions={(appointment) => (
             <>
             {["Booked", "Rescheduled"].includes(appointment.status) && <>
@@ -755,7 +815,7 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
   );
 }
 
-function AppointmentTable({ appointments, actions, loading = false }) {
+function AppointmentTable({ appointments, actions, loading = false, selectable = false, selectedIds = [], onToggle, onToggleAll }) {
   if (loading && !appointments.length) return <div className="empty-state">Loading appointments…</div>;
   if (!appointments.length) return <EmptyState />;
   return (
@@ -763,6 +823,7 @@ function AppointmentTable({ appointments, actions, loading = false }) {
       <table>
         <thead>
           <tr>
+            {selectable && <th><input type="checkbox" aria-label="Select all appointments on this page" checked={appointments.length > 0 && appointments.every((appointment) => selectedIds.includes(appointment.appointmentId))} onChange={onToggleAll} /></th>}
             <th>Patient</th>
             <th>ID</th>
             <th>Date</th>
@@ -776,6 +837,7 @@ function AppointmentTable({ appointments, actions, loading = false }) {
         <tbody>
           {appointments.map((appointment) => (
             <tr key={appointment.appointmentId}>
+              {selectable && <td><input type="checkbox" aria-label={`Select appointment ${appointment.appointmentId}`} checked={selectedIds.includes(appointment.appointmentId)} onChange={() => onToggle(appointment.appointmentId)} /></td>}
               <td>
                 <strong>{appointment.patientName}</strong>
                 <small>{appointment.maskedPhone || appointment.normalizedPhone}</small>

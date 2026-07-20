@@ -160,6 +160,44 @@ export async function getAppointmentById(appointmentId) {
   return models.Appointment.findOne({ appointmentId }).lean();
 }
 
+export async function deleteAppointments(appointmentIds, actor = null, req = null) {
+  const uniqueIds = [...new Set(appointmentIds)];
+  const session = await mongoose.startSession();
+  let deletedCount = 0;
+  let deletedAlertCount = 0;
+  try {
+    await session.withTransaction(async () => {
+      const appointments = await models.Appointment.find({ appointmentId: { $in: uniqueIds } })
+        .select("appointmentId")
+        .session(session)
+        .lean();
+      const foundIds = appointments.map((appointment) => appointment.appointmentId);
+      if (!foundIds.length) return;
+      const [appointmentResult, alertResult] = await Promise.all([
+        models.Appointment.deleteMany({ appointmentId: { $in: foundIds } }, { session }),
+        models.NotificationOutbox.deleteMany({ appointmentId: { $in: foundIds } }, { session })
+      ]);
+      deletedCount = appointmentResult.deletedCount || 0;
+      deletedAlertCount = alertResult.deletedCount || 0;
+    });
+
+    if (deletedCount) {
+      await addAuditLogSafely({
+        actor,
+        action: "Appointments permanently deleted",
+        module: "Appointments",
+        targetType: "AppointmentBatch",
+        targetId: `${deletedCount} appointment(s)`,
+        metadata: { appointmentIds: uniqueIds, deletedCount, deletedAlertCount },
+        req
+      });
+    }
+    return { requestedCount: uniqueIds.length, deletedCount, missingCount: uniqueIds.length - deletedCount };
+  } finally {
+    await session.endSession();
+  }
+}
+
 export async function lookupAppointmentSafe(payload) {
   const parsed = appointmentLookupSchema.parse(payload);
   const appointment = await models.Appointment.findOne({
