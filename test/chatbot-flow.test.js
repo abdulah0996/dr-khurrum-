@@ -25,6 +25,7 @@ const originals = {
   },
   Patient: {
     findOne: models.Patient.findOne,
+    findOneAndUpdate: models.Patient.findOneAndUpdate,
     create: models.Patient.create
   },
   WhatsAppConsent: { findOneAndUpdate: models.WhatsAppConsent.findOneAndUpdate },
@@ -81,6 +82,7 @@ test.before(() => {
   models.Appointment.findOne = () => query(null);
   models.Patient.findOne = () => ({ session: async () => null });
   models.Patient.create = async () => [{ patientId: "PAT-QA-1" }];
+  models.Patient.findOneAndUpdate = async () => ({ patientId: "PAT-QA-1" });
   models.WhatsAppConsent.findOneAndUpdate = async () => ({ optedIn: true });
   models.AuditLog.create = async (data) => data;
   models.Appointment.create = async ([data]) => {

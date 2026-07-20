@@ -3,6 +3,8 @@ import { authenticate } from "../middleware/auth.js";
 import { handleChatMessage } from "../services/chatbotService.js";
 import {
   getWhatsAppStatus,
+  completeWebhookEvent,
+  failWebhookEvent,
   isOptOutMessage,
   listMessageLogs,
   logMessage,
@@ -17,6 +19,7 @@ import { compactText, normalizePhone } from "../utils/time.js";
 import { chatMessageSchema } from "../utils/validation.js";
 import { DOCTOR } from "../config/clinic.js";
 import { parseIncomingMessage } from "../services/interactiveMessageService.js";
+import { updateAdminAlertDeliveryStatus } from "../services/adminAlertService.js";
 
 const router = Router();
 
@@ -60,68 +63,70 @@ export async function processWebhookPayload(payload) {
 
       for (const status of value.statuses || []) {
         await updateMessageStatus(status.id, status.status);
-        await logMessage({
-          phone: status.recipient_id,
-          messageType: "delivery_status",
-          direction: "Status",
-          status: status.status
-        });
+        await updateAdminAlertDeliveryStatus(status.id, status.status, String(status.errors?.[0]?.code || ""));
       }
 
       for (const message of value.messages || []) {
         const event = await recordWebhookEvent(message.id, message.type || "message");
-        if (event.duplicate) {
+        if (!event.accepted) {
           continue;
         }
+        try {
+          const rawFrom = message.from;
+          const phone = normalizePhone(rawFrom);
+          const text = extractIncomingText(message);
+          if (!/^\+\d{10,15}$/.test(phone) || !text) {
+            await completeWebhookEvent(message.id);
+            continue;
+          }
+          const language = detectLanguage(text);
 
-        const rawFrom = message.from;
-        const phone = normalizePhone(rawFrom);
-        const text = extractIncomingText(message);
-        if (!/^\+\d{10,15}$/.test(phone) || !text) {
-          continue;
-        }
-        const language = detectLanguage(text);
-
-        await logMessage({
-          phone,
-          messageType: "patient_message",
-          messageBody: text,
-          direction: "Incoming",
-          status: "received",
-          providerMessageId: message.id
-        });
-
-        if (isOptOutMessage(text)) {
-          await markOptOut({ phone, language });
-          await sendWhatsAppText({
-            to: phone,
-            text: optOutConfirmation(language),
-            messageType: "opt_out_confirmation",
-            language,
-            operational: true,
-            ignoreOptOut: true,
-            patientInitiated: true
+          await logMessage({
+            phone,
+            messageType: "patient_message",
+            messageBody: text,
+            direction: "Incoming",
+            status: "received",
+            providerMessageId: message.id
           });
-          continue;
-        }
 
-        await upsertInboundConsent({ phone, language, text });
-        const reply = await handleChatMessage({ phone, message: text });
-        await sendWhatsAppText({
-          to: phone,
-          text: reply.text,
-          messageType: "chatbot_reply",
-          appointmentId: reply.appointment?.appointmentId || "",
-          language,
-          options: reply.options || [],
-          patientInitiated: true
-        });
+          if (isOptOutMessage(text)) {
+            await markOptOut({ phone, language });
+            const sent = await sendWhatsAppText({
+              to: phone,
+              text: optOutConfirmation(language),
+              messageType: "opt_out_confirmation",
+              language,
+              operational: true,
+              ignoreOptOut: true,
+              patientInitiated: true
+            });
+            if (!sent.sent) throw new Error("WhatsApp opt-out confirmation was not delivered.");
+          } else {
+            await upsertInboundConsent({ phone, language, text });
+            const reply = await handleChatMessage({ phone, message: text, interactionId: message.id });
+            const sent = await sendWhatsAppText({
+              to: phone,
+              text: reply.text,
+              messageType: "chatbot_reply",
+              appointmentId: reply.appointment?.appointmentId || "",
+              language,
+              options: reply.options || [],
+              patientInitiated: true
+            });
+            if (!sent.sent) throw new Error("WhatsApp chatbot reply was not delivered.");
+          }
+          await completeWebhookEvent(message.id);
+        } catch (error) {
+          await failWebhookEvent(message.id, error);
+          throw error;
+        }
       }
     }
   }
 }
 
-router.post("/webhook", (req, res, next) => {
+router.post("/webhook", async (req, res, next) => {
   try {
     if (process.env.NODE_ENV === "production" || process.env.META_APP_SECRET) {
       const isSignatureValid = verifyMetaSignature(req);
@@ -130,12 +135,7 @@ router.post("/webhook", (req, res, next) => {
       }
     }
 
-    const payload = req.body;
-    setImmediate(() => {
-      processWebhookPayload(payload).catch((error) => {
-        console.error("WhatsApp webhook processing failed", { error: error.message });
-      });
-    });
+    await processWebhookPayload(req.body);
     res.json({ ok: true });
   } catch (error) {
     next(error);

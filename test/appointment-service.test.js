@@ -19,6 +19,7 @@ const originals = {
   },
   Patient: {
     findOne: models.Patient.findOne,
+    findOneAndUpdate: models.Patient.findOneAndUpdate,
     create: models.Patient.create
   },
   WhatsAppConsent: { findOneAndUpdate: models.WhatsAppConsent.findOneAndUpdate },
@@ -72,6 +73,7 @@ test.before(() => {
   models.BlockedSlot.find = () => query([]);
   models.Appointment.find = () => query([]);
   models.AuditLog.create = async (data) => data;
+  models.Patient.findOneAndUpdate = async () => ({ patientId: "PAT-QA-1" });
   mongoose.startSession = async () => ({
     ended: false,
     async withTransaction(callback) {
@@ -172,10 +174,31 @@ test("a future appointment cannot be accidentally marked No-Show", async () => {
   };
 
   await assert.rejects(
-    updateAppointmentStatus(future.appointmentId, "No-Show", { role: "Super Admin", userId: "USR-QA" }),
-    (error) => error.status === 409 && /future appointment cannot be marked No-Show/i.test(error.message)
+    updateAppointmentStatus(future.appointmentId, "No-Show", { role: "Super Admin", userId: "USR-QA" }, null, "Patient did not arrive"),
+    (error) => error.status === 409 && /cannot be marked No-Show until/i.test(error.message)
   );
   assert.equal(updateCalls, 0);
+});
+
+test("No-Show requires a verification note and concurrent status changes cannot overwrite one another", async () => {
+  const past = appointment({ date: addDaysIso(todayIso(), -1), time: "09:00" });
+  await assert.rejects(
+    updateAppointmentStatus(past.appointmentId, "No-Show", { role: "Receptionist", userId: "USR-QA" }),
+    (error) => error.status === 422 && /verification note/i.test(error.message)
+  );
+
+  let reads = 0;
+  let atomicFilter;
+  models.Appointment.findOne = () => query(reads++ === 0 ? past : { ...past, status: "Visited" });
+  models.Appointment.findOneAndUpdate = (filter) => {
+    atomicFilter = filter;
+    return query(null);
+  };
+  await assert.rejects(
+    updateAppointmentStatus(past.appointmentId, "No-Show", { role: "Receptionist", userId: "USR-QA" }, null, "Patient did not arrive"),
+    (error) => error.status === 409 && /changed to Visited/i.test(error.message)
+  );
+  assert.deepEqual(atomicFilter, { appointmentId: past.appointmentId, status: "Booked" });
 });
 
 test("rescheduling validates and atomically records the old and new slot", async () => {
@@ -220,8 +243,8 @@ test("a duplicate-key booking race returns the already-created matching appointm
     }
     return query(existing);
   };
-  models.Patient.findOne = () => ({ session: async () => null });
-  models.Patient.create = async () => [{ patientId: "PAT-QA-RACE" }];
+  models.Patient.findOne = () => query({ patientId: existing.patientId, normalizedPhone: existing.normalizedPhone });
+  models.Patient.findOneAndUpdate = async () => ({ patientId: existing.patientId, normalizedPhone: existing.normalizedPhone });
   models.WhatsAppConsent.findOneAndUpdate = async () => ({ optedIn: true });
   models.Appointment.create = async () => {
     const error = new Error("duplicate slot");
@@ -232,6 +255,7 @@ test("a duplicate-key booking race returns the already-created matching appointm
 
   const result = await createAppointment(
     {
+      patientId: existing.patientId,
       fullName: "Patient Name",
       phone: "+923001234567",
       age: 30,
@@ -251,4 +275,83 @@ test("a duplicate-key booking race returns the already-created matching appointm
   assert.equal(result.appointmentId, existing.appointmentId);
   assert.equal(result.tokenNumber, 1);
   assert.equal(duplicateChecks, 1);
+});
+
+test("new registrations sharing the same contact and demographics receive distinct patient identities", async () => {
+  const createdPatientIds = [];
+  models.Appointment.find = () => query([]);
+  models.Appointment.findOne = () => query(null);
+  models.Patient.create = async ([record]) => {
+    createdPatientIds.push(record.patientId);
+    return [{ ...record }];
+  };
+  models.Appointment.create = async ([record]) => [appointment(record)];
+  models.WhatsAppConsent.findOneAndUpdate = async () => ({ optedIn: true });
+  const date = nextWorkingDate();
+  const common = {
+    fullName: "Shared Family Name",
+    phone: "+923001234567",
+    age: 12,
+    gender: "Female",
+    city: "Jhang",
+    reasonForVisit: "Routine consultation",
+    locationId: clinic.locationId,
+    date,
+    language: "en",
+    source: "Reception",
+    consentAccepted: true
+  };
+
+  const first = await createAppointment({ ...common, time: "09:00" }, { role: "Receptionist", userId: "USR-QA" });
+  const second = await createAppointment({ ...common, time: "09:10" }, { role: "Receptionist", userId: "USR-QA" });
+  assert.notEqual(first.patientId, second.patientId);
+  assert.equal(new Set(createdPatientIds).size, 2);
+});
+
+test("an explicit patientId reuses only a patient belonging to the same normalized contact", async () => {
+  const known = { patientId: "PAT-EXPLICIT-QA", phone: "+92 300 1234567", normalizedPhone: "+923001234567" };
+  let updateFilter;
+  models.Patient.findOne = () => query(known);
+  models.Patient.findOneAndUpdate = (filter, update) => {
+    updateFilter = filter;
+    return Promise.resolve({ ...known, ...update.$set });
+  };
+  models.Appointment.find = () => query([]);
+  models.Appointment.create = async ([record]) => [appointment(record)];
+  models.WhatsAppConsent.findOneAndUpdate = async () => ({ optedIn: true });
+  const result = await createAppointment({
+    patientId: known.patientId,
+    fullName: "Repeat Patient",
+    phone: "+92 300 1234567",
+    age: 30,
+    gender: "Female",
+    city: "Jhang",
+    reasonForVisit: "Follow-up visit",
+    locationId: clinic.locationId,
+    date: nextWorkingDate(),
+    time: "09:00",
+    source: "Reception",
+    consentAccepted: true
+  }, { role: "Receptionist", userId: "USR-QA" });
+  assert.equal(result.patientId, known.patientId);
+  assert.deepEqual(updateFilter, { patientId: known.patientId, normalizedPhone: known.normalizedPhone });
+
+  models.Patient.findOne = () => query({ ...known, normalizedPhone: "+923009999999" });
+  await assert.rejects(
+    createAppointment({
+      patientId: known.patientId,
+      fullName: "Wrong Contact",
+      phone: "+923001234567",
+      age: 30,
+      gender: "Female",
+      city: "Jhang",
+      reasonForVisit: "Routine consultation",
+      locationId: clinic.locationId,
+      date: nextWorkingDate(),
+      time: "09:10",
+      source: "Reception",
+      consentAccepted: true
+    }),
+    (error) => error.status === 409 && /does not belong/i.test(error.message)
+  );
 });

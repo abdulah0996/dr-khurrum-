@@ -13,8 +13,11 @@
     "start": "node index.js",
     "test": "node --test",
     "test:coverage": "node --test --experimental-test-coverage",
+    "test:integration": "npm run test:mongodb",
     "test:mongodb": "node scripts/mongodb-integration-check.js",
-    "test:patient-ui": "node scripts/patient-ui-check.js",
+    "test:patient-ui": "npm run build && node scripts/patient-ui-check.js",
+    "test:browser": "npm run test:patient-ui",
+    "check:secrets": "node scripts/check-secrets.js",
     "check:dummy-content": "node scripts/check-dummy-content.js",
     "setup:clinic": "node scripts/setup-clinic.js"
   },
@@ -37,6 +40,7 @@
   },
   "devDependencies": {
     "concurrently": "^10.0.3",
+    "mongodb-memory-server": "^11.2.0",
     "vite": "^7.2.6"
   },
   "overrides": {

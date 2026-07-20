@@ -9,9 +9,11 @@ import helmet from "helmet";
 import { ensureRuntimeDefaults } from "./config/runtime.js";
 import { parseTrustProxy } from "./config/trustProxy.js";
 import { validateEnvironment } from "./config/validation.js";
-import { connectDatabase, databaseHealth, disconnectDatabase } from "./db/connection.js";
+import { connectDatabase, databaseHealth, disconnectDatabase, isDatabaseReady, markDatabaseInitialized, startDatabaseRecovery } from "./db/connection.js";
+import { runSafeMigrations } from "./db/migrations.js";
 import { authenticate } from "./middleware/auth.js";
 import { rejectParameterPollution, requestId, sanitizeInput, securityHeaders } from "./middleware/security.js";
+import { accessLogger, requestTimeout } from "./middleware/observability.js";
 import appointmentsRoutes from "./routes/appointments.js";
 import authRoutes from "./routes/auth.js";
 import publicRoutes from "./routes/public.js";
@@ -21,6 +23,8 @@ import usersRoutes from "./routes/users.js";
 import whatsappRoutes from "./routes/whatsapp.js";
 import { ensureClinicConfiguration } from "./services/clinicConfigService.js";
 import { getWhatsAppStatus } from "./services/whatsappService.js";
+import { ensureConfiguredRetention } from "./services/retentionService.js";
+import { startAdminAlertWorker, stopAdminAlertWorker } from "./services/adminAlertService.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
@@ -29,7 +33,6 @@ const port = process.env.PORT && isNaN(Number(process.env.PORT)) ? process.env.P
 let server;
 ensureRuntimeDefaults();
 let startupValidation = validateEnvironment();
-let databaseDisabled = false;
 
 function allowedOrigins() {
   const configured = String(process.env.CORS_ALLOWED_ORIGINS || "")
@@ -40,12 +43,16 @@ function allowedOrigins() {
   return ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:4000"];
 }
 
+export function skipGeneralRateLimit(req) {
+  return req.path.startsWith("/api/whatsapp/webhook") || ["/api/auth/login", "/api/auth/refresh"].includes(req.path);
+}
+
 const generalLimiter = rateLimit({
   windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000),
   limit: Number(process.env.RATE_LIMIT_MAX || 300),
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => req.path.startsWith("/api/whatsapp/webhook") || req.path === "/api/auth/login"
+  skip: skipGeneralRateLimit
 });
 
 const chatLimiter = rateLimit({ windowMs: 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false });
@@ -64,6 +71,8 @@ const adminLimiter = rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeader
 app.disable("x-powered-by");
 app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY || "1"));
 app.use(requestId);
+app.use(accessLogger);
+app.use(requestTimeout());
 app.use(
   helmet({
     contentSecurityPolicy: false,
@@ -94,7 +103,7 @@ app.use(rejectParameterPollution);
 app.use(sanitizeInput);
 app.use(generalLimiter);
 app.use((req, res, next) => {
-  if (databaseDisabled && req.path.startsWith("/api") && req.path !== "/api/health") {
+  if (process.env.NODE_ENV !== "test" && !isDatabaseReady() && req.path.startsWith("/api") && !req.path.startsWith("/api/health") && !req.path.startsWith("/api/whatsapp/webhook")) {
     return res.status(503).json({ message: "Database connection is not available. Please try again later." });
   }
   return next();
@@ -113,6 +122,20 @@ app.get("/api/health", (_req, res) => {
     whatsappConfigured: whatsapp.configured,
     configurationOk: startupValidation.ok,
     uptimeSeconds: Math.round(process.uptime())
+  });
+});
+
+app.get("/api/health/live", (_req, res) => {
+  res.json({ status: "ok", uptimeSeconds: Math.round(process.uptime()) });
+});
+
+app.get("/api/health/ready", (_req, res) => {
+  const database = databaseHealth();
+  const ready = startupValidation.ok && database.ready;
+  res.status(ready ? 200 : 503).json({
+    status: ready ? "ready" : "not_ready",
+    mongoConnected: database.ready,
+    configurationOk: startupValidation.ok
   });
 });
 
@@ -138,9 +161,18 @@ if (fs.existsSync(distPath)) {
   });
 }
 
-app.use((err, _req, res, _next) => {
+app.use((err, req, res, _next) => {
   const status = err.status || (err.name === "ZodError" ? 422 : 500);
   const productionServerError = process.env.NODE_ENV === "production" && status >= 500;
+  if (status >= 500) {
+    console.error("Request failed", {
+      requestId: String(req.requestId || "").slice(0, 80),
+      method: req.method,
+      path: String(req.path || "").slice(0, 160),
+      errorName: String(err.name || "Error").slice(0, 80),
+      errorCode: String(err.code || "").slice(0, 80)
+    });
+  }
   const payload = {
     message: err.name === "ZodError" ? "Validation failed." : productionServerError ? "Something went wrong." : err.message || "Something went wrong."
   };
@@ -159,9 +191,11 @@ async function start() {
     console.error(
       `Startup configuration is incomplete. The website will remain online while affected API features stay unavailable: ${startupValidation.errors.join(" ")}`
     );
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Production configuration validation failed. See the redacted startup errors above.");
+    }
   }
 
-  databaseDisabled = true;
   await new Promise((resolve, reject) => {
     server = app.listen(port, () => {
       const address = typeof port === "string" ? port : `http://localhost:${port}`;
@@ -176,20 +210,32 @@ async function start() {
 
   try {
     const database = await connectDatabase();
-    databaseDisabled = !database.connected;
     if (database.connected) {
+      await runSafeMigrations();
+      await ensureConfiguredRetention();
       await ensureClinicConfiguration();
+      markDatabaseInitialized();
+      startAdminAlertWorker();
     } else {
       console.warn("MongoDB is unavailable. The website remains online and API routes will return 503 until the database connection is restored.");
     }
   } catch (error) {
-    databaseDisabled = true;
     console.error("Database initialization failed after the HTTP server started:", error.message);
   }
+  startDatabaseRecovery({
+    onConnected: async () => {
+      await runSafeMigrations();
+      await ensureConfiguredRetention();
+      await ensureClinicConfiguration();
+      startAdminAlertWorker();
+      console.log("MongoDB recovery completed; database API routes are available again.");
+    }
+  });
 }
 
 async function shutdown(signal, exitCode = 0) {
   console.log(`${signal} received. Shutting down appointment chatbot API...`);
+  stopAdminAlertWorker();
   await new Promise((resolve) => {
     if (!server) return resolve();
     return server.close(resolve);

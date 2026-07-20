@@ -24,3 +24,7 @@ credentials*.json
 *.key
 .DS_Store
 Thumbs.db
+
+# Local audit deliverables and Microsoft Word lock files are not release assets.
+/Dr-Khurram-Code-Bug-Audit-Report.docx
+/~$*.docx

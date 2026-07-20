@@ -66,18 +66,18 @@ test("verified doctor and clinic configuration is exact and FCPS remains withhel
   assert.deepEqual(DEFAULT_LOCATIONS, []);
 });
 
-test("verified schedule creates exactly 28 time-linked tokens and excludes the prayer break", () => {
+test("verified schedule creates 30 ten-minute tokens from 09:00 to 14:00 with no break", () => {
   const monday = "2026-06-29";
   const slots = generateScheduleSlots(VERIFIED_GENERAL_SCHEDULE, monday);
-  assert.equal(slots.length, 28);
+  assert.equal(slots.length, 30);
   assert.equal(slots[0], "09:00");
-  assert.equal(slots[15], "12:45");
-  assert.equal(slots[16], "14:00");
-  assert.equal(slots[27], "16:45");
-  assert.deepEqual(slots.filter((time) => time >= "13:00" && time < "14:00"), []);
+  assert.equal(slots[15], "11:30");
+  assert.equal(slots[24], "13:00");
+  assert.equal(slots[29], "13:50");
+  assert.deepEqual(slots.filter((time) => time >= "13:00" && time < "14:00"), ["13:00", "13:10", "13:20", "13:30", "13:40", "13:50"]);
   slots.forEach((time, index) => assert.equal(tokenNumberForTime(VERIFIED_GENERAL_SCHEDULE, monday, time), index + 1));
   assert.equal(tokenNumberForTime(VERIFIED_GENERAL_SCHEDULE, monday, "13:15"), null);
-  for (const unavailable of ["08:45", "13:00", "13:15", "13:30", "13:45", "17:00"]) {
+  for (const unavailable of ["08:50", "13:15", "14:00", "17:00"]) {
     assert.equal(tokenNumberForTime(VERIFIED_GENERAL_SCHEDULE, monday, unavailable), null);
   }
   assert.equal(generateScheduleSlots(VERIFIED_GENERAL_SCHEDULE, "2026-07-04").length, 0);
@@ -104,7 +104,7 @@ test("database indexes prevent duplicate active time slots and tokens", () => {
   const indexes = AppointmentSchema.indexes().map(([keys, options]) => ({ keys, options }));
   assert.ok(indexes.some(({ keys, options }) => keys.locationId === 1 && keys.date === 1 && keys.time === 1 && options.unique));
   assert.ok(indexes.some(({ keys, options }) => keys.locationId === 1 && keys.date === 1 && keys.tokenNumber === 1 && options.unique));
-  assert.ok(indexes.some(({ keys, options }) => keys.normalizedPhone === 1 && keys.date === 1 && options.unique));
+  assert.ok(indexes.some(({ keys, options }) => keys.patientId === 1 && keys.date === 1 && options.unique));
 });
 
 test("profile, clinic, reception, confirmation, and emergency content is bilingual", () => {
@@ -112,8 +112,10 @@ test("profile, clinic, reception, confirmation, and emergency content is bilingu
   assert.match(doctorProfileMessage("en"), /Consultant Gynecologist/);
   assert.match(doctorProfileMessage("ur"), /ماہرِ امراضِ نسواں/);
   assert.doesNotMatch(doctorProfileMessage("en"), /FCPS/);
-  assert.match(locationsMessage([clinic], "en"), /Nighat Medical Complex[\s\S]*1:00 PM to 2:00 PM/);
-  assert.match(locationsMessage([clinic], "ur"), /نگہت میڈیکل کمپلیکس[\s\S]*نماز اور کلینک کا وقفہ/);
+  assert.match(locationsMessage([clinic], "en"), /Nighat Medical Complex[\s\S]*9:00 AM to 2:00 PM/);
+  const urduLocations = locationsMessage([clinic], "ur");
+  assert.match(urduLocations, /نگہت میڈیکل کمپلیکس[\s\S]*10/);
+  assert.doesNotMatch(urduLocations, /نماز اور کلینک کا وقفہ/);
   assert.equal(contactReceptionMessage("en"), "For appointment assistance, please contact the reception team at +92 335 7504478 during clinic hours.");
   assert.match(contactReceptionMessage("ur"), /\u2066\+92 335 7504478\u2069/u);
   assert.match(emergencyMessage("en"), /Heavy vaginal bleeding/);

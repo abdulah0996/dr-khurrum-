@@ -6,10 +6,7 @@ import path from "node:path";
 import net from "node:net";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-
-function testDatabaseName(uri) {
-  return String(uri || "").match(/\.net\/([^?]+)/i)?.[1] || "";
-}
+import { acquireDisposableTestMongo } from "./lib/test-mongodb.js";
 
 function findChrome() {
   const candidates = [
@@ -374,12 +371,11 @@ async function cleanupQaData(phones) {
 }
 
 async function run() {
-  const uri = process.env.TEST_MONGODB_URI;
-  const databaseName = testDatabaseName(uri);
-  assert.ok(uri && /_test$/i.test(databaseName), "TEST_MONGODB_URI must target a database ending in _test.");
   const chromePath = findChrome();
   assert.ok(chromePath, "Chrome or Chromium was not found. Set CHROME_PATH to run the patient UI check.");
   assert.ok(fs.existsSync(path.resolve("dist/index.html")), "Run npm run build before the patient UI check.");
+  const disposableMongo = await acquireDisposableTestMongo({ databaseName: "khurrum_patient_ui_test" });
+  const { uri, databaseName } = disposableMongo;
 
   process.env.MONGODB_URI = uri;
   process.env.NODE_ENV = "development";
@@ -435,6 +431,7 @@ async function run() {
     if (server && !server.killed) server.kill();
     await delay(300);
     await cleanupQaData(phones).catch((error) => console.error("Patient UI cleanup failed:", error.message));
+    await disposableMongo.stop();
   }
 }
 

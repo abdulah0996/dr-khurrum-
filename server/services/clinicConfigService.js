@@ -1,4 +1,4 @@
-import { DEFAULT_LOCATIONS, DOCTOR, VERIFIED_GENERAL_SCHEDULE } from "../config/clinic.js";
+import { DEFAULT_LOCATIONS, DOCTOR } from "../config/clinic.js";
 import { models } from "../models/index.js";
 import { makePublicId } from "../utils/time.js";
 
@@ -44,20 +44,9 @@ export async function ensureClinicConfiguration() {
     if (activeSchedules.length !== activeLocations.length) {
       throw new Error("Every verified active clinic must have one active schedule.");
     }
-    const expectedDays = VERIFIED_GENERAL_SCHEDULE.workingDays.join(",");
-    const invalidSchedule = activeSchedules.find(
-      (schedule) =>
-        [...schedule.workingDays].sort().join(",") !== [...VERIFIED_GENERAL_SCHEDULE.workingDays].sort().join(",") ||
-        schedule.openingTime !== VERIFIED_GENERAL_SCHEDULE.openingTime ||
-        schedule.closingTime !== VERIFIED_GENERAL_SCHEDULE.closingTime ||
-        schedule.breakStart !== VERIFIED_GENERAL_SCHEDULE.breakStart ||
-        schedule.breakEnd !== VERIFIED_GENERAL_SCHEDULE.breakEnd ||
-        schedule.slotDurationMinutes !== VERIFIED_GENERAL_SCHEDULE.slotDurationMinutes ||
-        schedule.dailyLimit !== VERIFIED_GENERAL_SCHEDULE.dailyLimit ||
-        schedule.timezone !== VERIFIED_GENERAL_SCHEDULE.timezone
-    );
+    const invalidSchedule = activeSchedules.find((schedule) => schedule.timezone !== "Asia/Karachi");
     if (invalidSchedule) {
-      throw new Error(`Active clinic schedules must use the verified days (${expectedDays}), hours, and timezone.`);
+      throw new Error("Every active clinic schedule must use the Asia/Karachi timezone.");
     }
   }
 }

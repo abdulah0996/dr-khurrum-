@@ -8,10 +8,12 @@ function randomSecret() {
 
 export function ensureRuntimeDefaults(env = process.env) {
   env.NODE_ENV = env.NODE_ENV || "development";
-  env.JWT_ACCESS_SECRET = env.JWT_ACCESS_SECRET || randomSecret();
-  env.JWT_REFRESH_SECRET = env.JWT_REFRESH_SECRET || randomSecret();
-  env.COOKIE_SECRET = env.COOKIE_SECRET || randomSecret();
-  env.ADMIN_BOOTSTRAP_TOKEN = env.ADMIN_BOOTSTRAP_TOKEN || randomSecret();
+  if (env.NODE_ENV !== "production") {
+    env.JWT_ACCESS_SECRET = env.JWT_ACCESS_SECRET || randomSecret();
+    env.JWT_REFRESH_SECRET = env.JWT_REFRESH_SECRET || randomSecret();
+    env.COOKIE_SECRET = env.COOKIE_SECRET || randomSecret();
+    env.ADMIN_BOOTSTRAP_TOKEN = env.ADMIN_BOOTSTRAP_TOKEN || randomSecret();
+  }
   env.DEFAULT_TIMEZONE = env.DEFAULT_TIMEZONE || "Asia/Karachi";
   env.WHATSAPP_REQUIRED = env.WHATSAPP_REQUIRED || "false";
 

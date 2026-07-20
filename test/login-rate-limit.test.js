@@ -94,7 +94,8 @@ test("React login uses one guarded form submit and disables during submission", 
   assert.match(source, /disabled=\{submitting\}/);
   assert.doesNotMatch(source, /onClick=\{submit\}/);
   assert.match(source, /Your saved records have not been removed/);
-  assert.match(source, /const appointmentsRequest = api\("\/appointments"\)/);
-  assert.match(source, /setData\(\(current\) => \(\{ \.\.\.current, appointments: result\.appointments \|\| \[\] \}\)\)/);
+  assert.match(source, /const appointmentsRequest = Promise\.allSettled\(appointmentBatch\)/);
+  assert.match(source, /api\("\/appointments\?page=1&limit=50"\)/);
+  assert.match(source, /appointments: allResult\.status === "fulfilled" \? allResult\.value\.appointments \|\| \[\] : current\.appointments/);
   assert.match(source, /Loading appointments…/);
 });

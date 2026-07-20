@@ -17,6 +17,7 @@ import {
   flagAppointmentsForReschedule,
   getBlockedSlotImpact,
   getSpecialScheduleImpact,
+  getSpecialScheduleRemovalImpact,
   toPublicImpact
 } from "../services/scheduleImpactService.js";
 
@@ -142,12 +143,25 @@ router.put("/special", requireRole("Super Admin"), async (req, res, next) => {
   }
 });
 
+router.post("/special/:specialScheduleId/removal-impact", requireRole("Super Admin"), async (req, res, next) => {
+  try {
+    const removal = await getSpecialScheduleRemovalImpact(req.params.specialScheduleId);
+    if (!removal) return res.status(404).json({ message: "Special schedule was not found." });
+    return res.json({ impact: toPublicImpact(removal.impact) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.delete("/special/:specialScheduleId", requireRole("Super Admin"), async (req, res, next) => {
   try {
+    const removal = await getSpecialScheduleRemovalImpact(req.params.specialScheduleId);
+    if (!removal) return res.status(404).json({ message: "Special schedule was not found." });
     const specialSchedule = await removeSpecialSchedule(req.params.specialScheduleId);
-    if (!specialSchedule) return res.status(404).json({ message: "Special schedule was not found." });
+    if (!specialSchedule) return res.status(409).json({ message: "Special schedule was already removed. Refresh and try again." });
+    await flagAppointmentsForReschedule(removal.impact, "Special schedule removed");
     await addAuditLog({ actor: req.user, action: "Special schedule removed", module: "Slots", targetType: "SpecialSchedule", targetId: specialSchedule.specialScheduleId, req });
-    return res.json({ specialSchedule });
+    return res.json({ specialSchedule, impact: toPublicImpact(removal.impact) });
   } catch (error) {
     return next(error);
   }
