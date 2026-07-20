@@ -24,6 +24,7 @@ import whatsappRoutes from "./routes/whatsapp.js";
 import { ensureClinicConfiguration } from "./services/clinicConfigService.js";
 import { getWhatsAppStatus } from "./services/whatsappService.js";
 import { ensureConfiguredRetention } from "./services/retentionService.js";
+import { startAdminAlertWorker, stopAdminAlertWorker } from "./services/adminAlertService.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
@@ -214,6 +215,7 @@ async function start() {
       await ensureConfiguredRetention();
       await ensureClinicConfiguration();
       markDatabaseInitialized();
+      startAdminAlertWorker();
     } else {
       console.warn("MongoDB is unavailable. The website remains online and API routes will return 503 until the database connection is restored.");
     }
@@ -225,6 +227,7 @@ async function start() {
       await runSafeMigrations();
       await ensureConfiguredRetention();
       await ensureClinicConfiguration();
+      startAdminAlertWorker();
       console.log("MongoDB recovery completed; database API routes are available again.");
     }
   });
@@ -232,6 +235,7 @@ async function start() {
 
 async function shutdown(signal, exitCode = 0) {
   console.log(`${signal} received. Shutting down appointment chatbot API...`);
+  stopAdminAlertWorker();
   await new Promise((resolve) => {
     if (!server) return resolve();
     return server.close(resolve);

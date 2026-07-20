@@ -19,6 +19,7 @@ import { compactText, normalizePhone } from "../utils/time.js";
 import { chatMessageSchema } from "../utils/validation.js";
 import { DOCTOR } from "../config/clinic.js";
 import { parseIncomingMessage } from "../services/interactiveMessageService.js";
+import { updateAdminAlertDeliveryStatus } from "../services/adminAlertService.js";
 
 const router = Router();
 
@@ -62,6 +63,7 @@ export async function processWebhookPayload(payload) {
 
       for (const status of value.statuses || []) {
         await updateMessageStatus(status.id, status.status);
+        await updateAdminAlertDeliveryStatus(status.id, status.status, String(status.errors?.[0]?.code || ""));
       }
 
       for (const message of value.messages || []) {

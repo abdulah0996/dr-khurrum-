@@ -137,7 +137,8 @@ export function templateNameForMessageType(messageType = "") {
 }
 
 function templateLanguage(language = "en") {
-  return language === "ur" ? "ur" : "en";
+  const code = String(language || "en").trim();
+  return /^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(code) ? code : "en";
 }
 
 function textParameter(value) {
@@ -425,6 +426,56 @@ async function sendWithRetry(payload) {
     await sleep(Math.min(250 * 2 ** attempt, 1000));
   }
   return { ...lastResult, retryCount: maxRetries };
+}
+
+export async function sendTemplateMessage({ to, templateName, languageCode, parameters }) {
+  const recipient = String(to || "").trim();
+  const name = compactText(templateName, 128);
+  const language = String(languageCode || "").trim();
+  const values = Array.isArray(parameters) ? parameters.map((value) => compactText(value, 1024)) : [];
+  if (!whatsappConfigured()) {
+    return { sent: false, temporary: true, statusCode: 0, failureCode: "NOT_CONFIGURED", failureMessageSafe: "WhatsApp is not configured." };
+  }
+  if (!/^\d{10,15}$/.test(recipient)) {
+    return { sent: false, temporary: false, statusCode: 0, failureCode: "INVALID_RECIPIENT", failureMessageSafe: "The alert recipient is invalid." };
+  }
+  if (!name || !/^[a-z0-9_]+$/.test(name)) {
+    return { sent: false, temporary: false, statusCode: 0, failureCode: "INVALID_TEMPLATE", failureMessageSafe: "The alert template is invalid." };
+  }
+  if (!/^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(language)) {
+    return { sent: false, temporary: false, statusCode: 0, failureCode: "INVALID_LANGUAGE", failureMessageSafe: "The alert template language is invalid." };
+  }
+  if (values.length !== 6 || values.some((value) => !value || /^(?:undefined|null|\[object Object\])$/i.test(value))) {
+    return { sent: false, temporary: false, statusCode: 0, failureCode: "INVALID_PARAMETERS", failureMessageSafe: "The alert template parameters are incomplete." };
+  }
+
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: recipient,
+    type: "template",
+    template: {
+      name,
+      language: { code: language },
+      components: [{ type: "body", parameters: values.map(textParameter) }]
+    }
+  };
+  try {
+    const result = await postToWhatsApp(payload);
+    const temporary = !result.ok && (result.statusCode === 0 || isRetryableWhatsAppStatus(result.statusCode));
+    const metaCode = Number(result.body?.error?.code);
+    return result.ok
+      ? { sent: true, providerMessageId: result.providerMessageId, statusCode: result.statusCode }
+      : {
+          sent: false,
+          temporary,
+          statusCode: result.statusCode,
+          failureCode: Number.isFinite(metaCode) ? `META_${metaCode}` : `HTTP_${result.statusCode || 0}`,
+          failureMessageSafe: temporary ? "Meta temporarily could not accept the alert." : "Meta rejected the alert configuration or recipient."
+        };
+  } catch {
+    return { sent: false, temporary: true, statusCode: 0, failureCode: "NETWORK_ERROR", failureMessageSafe: "Meta could not be reached temporarily." };
+  }
 }
 
 export async function sendWhatsAppText({

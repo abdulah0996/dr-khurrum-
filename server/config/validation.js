@@ -77,9 +77,13 @@ export function validateEnvironment(env = process.env) {
   const warnings = [];
   const production = env.NODE_ENV === "production";
   const whatsappRequired = String(env.WHATSAPP_REQUIRED || "false").trim().toLowerCase() === "true";
+  const adminAlertEnabled = String(env.WHATSAPP_ADMIN_ALERT_ENABLED || "false").trim().toLowerCase() === "true";
 
   if (env.WHATSAPP_REQUIRED && !/^(?:true|false)$/i.test(String(env.WHATSAPP_REQUIRED).trim())) {
     errors.push("WHATSAPP_REQUIRED must be true or false.");
+  }
+  if (env.WHATSAPP_ADMIN_ALERT_ENABLED && !/^(?:true|false)$/i.test(String(env.WHATSAPP_ADMIN_ALERT_ENABLED).trim())) {
+    errors.push("WHATSAPP_ADMIN_ALERT_ENABLED must be true or false.");
   }
   if (env.RUN_PATIENT_IDENTITY_MIGRATION && !/^(?:true|false)$/i.test(String(env.RUN_PATIENT_IDENTITY_MIGRATION).trim())) {
     errors.push("RUN_PATIENT_IDENTITY_MIGRATION must be true or false.");
@@ -119,6 +123,21 @@ export function validateEnvironment(env = process.env) {
       CORE_WHATSAPP_KEYS.forEach((key) => {
         if (looksMissing(env[key] || "")) errors.push(`${key} is required when WHATSAPP_REQUIRED=true.`);
       });
+    }
+  }
+
+  if (adminAlertEnabled) {
+    CORE_WHATSAPP_KEYS.forEach((key) => {
+      if (looksMissing(env[key] || "")) errors.push(`${key} is required when WHATSAPP_ADMIN_ALERT_ENABLED=true.`);
+    });
+    if (!/^\d{10,15}$/.test(String(env.WHATSAPP_ADMIN_ALERT_NUMBER || "").trim())) {
+      errors.push("WHATSAPP_ADMIN_ALERT_NUMBER must contain 10 to 15 digits only.");
+    }
+    if (String(env.WHATSAPP_ADMIN_ALERT_TEMPLATE || "").trim() !== "apointment_book_system_") {
+      errors.push("WHATSAPP_ADMIN_ALERT_TEMPLATE must be apointment_book_system_.");
+    }
+    if (!/^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(String(env.WHATSAPP_ADMIN_ALERT_LANGUAGE || "").trim())) {
+      errors.push("WHATSAPP_ADMIN_ALERT_LANGUAGE must be a valid Meta template language code.");
     }
   }
 

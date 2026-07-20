@@ -13,6 +13,8 @@ import { sendAppointmentWhatsApp } from "../services/whatsappService.js";
 import { appointmentConfirmation, cancellationConfirmation, rescheduleConfirmation } from "../services/messageTemplates.js";
 import { DOCTOR } from "../config/clinic.js";
 import { requireRole } from "../middleware/auth.js";
+import { retryAdminAppointmentAlert } from "../services/adminAlertService.js";
+import { addAuditLogSafely } from "../services/auditService.js";
 import { adminStatusSchema, appointmentCancelSchema, appointmentCreateSchema, appointmentLookupSchema, appointmentRescheduleSchema } from "../utils/validation.js";
 
 const router = Router();
@@ -118,6 +120,23 @@ router.post("/:appointmentId/reminder", async (req, res, next) => {
       language
     });
     res.json({ appointment, whatsapp });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/:appointmentId/admin-alert/retry", requireRole("Super Admin", "Receptionist"), async (req, res, next) => {
+  try {
+    const adminAlert = await retryAdminAppointmentAlert(req.params.appointmentId);
+    await addAuditLogSafely({
+      actor: req.user,
+      action: "Admin appointment alert retry requested",
+      module: "WhatsApp",
+      targetType: "Appointment",
+      targetId: req.params.appointmentId,
+      req
+    });
+    res.json({ adminAlert });
   } catch (error) {
     next(error);
   }

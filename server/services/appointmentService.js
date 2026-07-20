@@ -4,6 +4,7 @@ import { models } from "../models/index.js";
 import { getDoctorProfile, getLocation } from "./clinicConfigService.js";
 import { minutesUntilLocalAppointment, validateSlotAvailability } from "./slotService.js";
 import { addAuditLogSafely } from "./auditService.js";
+import { adminAlertsForAppointments, queueAdminAppointmentAlert, scheduleAdminAlertProcessing } from "./adminAlertService.js";
 import { appointmentCreateSchema, appointmentLookupSchema, appointmentRescheduleSchema, appointmentCancelSchema } from "../utils/validation.js";
 import { escapeRegex, makeAppointmentId, makePublicId, maskPhone, normalizePhone } from "../utils/time.js";
 
@@ -77,6 +78,7 @@ export async function listAppointments(filters = {}) {
     ];
   }
   const appointments = await models.Appointment.find(query).sort({ date: -1, time: -1 }).limit(Math.min(Number(filters.limit || 500), 1000)).lean();
+  const alertMap = await adminAlertsForAppointments(appointments.map((item) => item.appointmentId));
   return appointments.map((item) => ({
     appointmentId: item.appointmentId,
     patientName: item.patientName,
@@ -94,6 +96,7 @@ export async function listAppointments(filters = {}) {
     tokenNumber: item.tokenNumber,
     status: item.status,
     source: item.source,
+    adminAlert: alertMap.get(item.appointmentId) || null,
     requiresReschedule: Boolean(item.requiresReschedule),
     rescheduleReason: item.rescheduleReason || "",
     createdAt: item.createdAt,
@@ -123,6 +126,7 @@ export async function listAppointmentsPage(filters = {}) {
     models.Appointment.find(query).sort({ date: -1, time: -1, _id: -1 }).skip((page - 1) * limit).limit(limit).lean(),
     models.Appointment.countDocuments(query)
   ]);
+  const alertMap = await adminAlertsForAppointments(items.map((item) => item.appointmentId));
   const appointments = items.map((item) => ({
     appointmentId: item.appointmentId,
     patientName: item.patientName,
@@ -140,6 +144,7 @@ export async function listAppointmentsPage(filters = {}) {
     tokenNumber: item.tokenNumber,
     status: item.status,
     source: item.source,
+    adminAlert: alertMap.get(item.appointmentId) || null,
     requiresReschedule: Boolean(item.requiresReschedule),
     rescheduleReason: item.rescheduleReason || "",
     createdAt: item.createdAt,
@@ -206,6 +211,7 @@ export async function createAppointment(input, actor = null, req = null) {
   const session = await mongoose.startSession();
   try {
     let appointment;
+    let adminAlertQueued = false;
     await session.withTransaction(async () => {
       const patientDetails = {
         fullName: parsed.fullName,
@@ -290,6 +296,7 @@ export async function createAppointment(input, actor = null, req = null) {
         ],
         { session }
       ).then((items) => items[0]);
+      adminAlertQueued = (await queueAdminAppointmentAlert(appointment, { session })).queued;
     });
 
     await addAuditLogSafely({
@@ -301,6 +308,8 @@ export async function createAppointment(input, actor = null, req = null) {
       metadata: { source: appointment.source, date: appointment.date, locationId: appointment.locationId },
       req
     });
+
+    if (adminAlertQueued) scheduleAdminAlertProcessing(appointment.appointmentId);
 
     return appointment.toObject();
   } catch (error) {

@@ -313,6 +313,47 @@ MessageLogSchema.index(
   }
 );
 
+export const NotificationOutboxSchema = new mongoose.Schema(
+  {
+    notificationId: publicId,
+    appointmentId: { type: String, required: true, trim: true, index: true },
+    notificationType: { type: String, required: true, enum: ["ADMIN_NEW_APPOINTMENT_ALERT"], index: true },
+    recipientPhone: { type: String, required: true, trim: true },
+    templateName: { type: String, required: true, trim: true },
+    templateLanguage: { type: String, required: true, trim: true },
+    templateParameters: { type: [String], required: true, validate: (values) => values.length === 6 },
+    status: {
+      type: String,
+      enum: ["queued", "sending", "sent", "delivered", "read", "failed", "dead_letter"],
+      default: "queued",
+      index: true
+    },
+    providerMessageId: { type: String, trim: true, default: "" },
+    attemptCount: { type: Number, default: 0, min: 0 },
+    nextRetryAt: { type: Date, default: Date.now, index: true },
+    lockedAt: Date,
+    lockExpiresAt: { type: Date, index: true },
+    lastAttemptAt: Date,
+    sentAt: Date,
+    deliveredAt: Date,
+    readAt: Date,
+    failedAt: Date,
+    failureCode: { type: String, trim: true, default: "" },
+    failureMessageSafe: { type: String, trim: true, default: "" }
+  },
+  schemaOptions
+);
+
+NotificationOutboxSchema.index(
+  { appointmentId: 1, notificationType: 1, recipientPhone: 1 },
+  { unique: true }
+);
+NotificationOutboxSchema.index({ status: 1, nextRetryAt: 1, lockExpiresAt: 1 });
+NotificationOutboxSchema.index(
+  { providerMessageId: 1 },
+  { unique: true, partialFilterExpression: { providerMessageId: { $type: "string", $gt: "" } } }
+);
+
 export const AuditLogSchema = new mongoose.Schema(
   {
     auditLogId: publicId,
@@ -443,6 +484,7 @@ export const models = {
   Patient: mongoose.models.Patient || mongoose.model("Patient", PatientSchema),
   Appointment: mongoose.models.Appointment || mongoose.model("Appointment", AppointmentSchema),
   MessageLog: mongoose.models.MessageLog || mongoose.model("MessageLog", MessageLogSchema),
+  NotificationOutbox: mongoose.models.NotificationOutbox || mongoose.model("NotificationOutbox", NotificationOutboxSchema),
   AuditLog: mongoose.models.AuditLog || mongoose.model("AuditLog", AuditLogSchema),
   WhatsAppConsent: mongoose.models.WhatsAppConsent || mongoose.model("WhatsAppConsent", WhatsAppConsentSchema),
   WebhookEvent: mongoose.models.WebhookEvent || mongoose.model("WebhookEvent", WebhookEventSchema),

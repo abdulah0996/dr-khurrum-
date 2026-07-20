@@ -664,6 +664,18 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
     }
   };
 
+  const retryAlert = async (appointment) => {
+    const actionKey = `alert:${appointment.appointmentId}`;
+    setActionLoading(actionKey);
+    try {
+      await api(`/appointments/${appointment.appointmentId}/admin-alert/retry`, { method: "POST" });
+      await loadPage(pagination.page);
+      flash("Personal WhatsApp alert queued for retry.");
+    } finally {
+      setActionLoading("");
+    }
+  };
+
   return (
     <div className="page-stack">
       <section className="toolbar-panel">
@@ -693,7 +705,8 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
           appointments={filtered}
           loading={loading || pageLoading}
           actions={(appointment) => (
-            ["Booked", "Rescheduled"].includes(appointment.status) ? <>
+            <>
+            {["Booked", "Rescheduled"].includes(appointment.status) && <>
               <button title="Reschedule" disabled={actionLoading === appointment.appointmentId} onClick={() => setReschedule(appointment)}>
                 <RefreshCw size={15} />
               </button>
@@ -706,7 +719,13 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
               <button title="Cancel" disabled={actionLoading === appointment.appointmentId} onClick={() => cancel(appointment)}>
                 <Ban size={15} />
               </button>
-            </> : null
+            </>}
+            {["failed", "dead_letter"].includes(appointment.adminAlert?.status) && (
+              <button type="button" className="ghost-button" disabled={Boolean(actionLoading)} onClick={() => retryAlert(appointment)}>
+                {actionLoading === `alert:${appointment.appointmentId}` ? "Retrying…" : "Retry Alert"}
+              </button>
+            )}
+            </>
           )}
         />
         <div className="toolbar-panel">
@@ -769,6 +788,9 @@ function AppointmentTable({ appointments, actions, loading = false }) {
               <td>
                 <Badge status={appointment.status} />
                 {appointment.requiresReschedule && <small className="attention-text">Staff action required</small>}
+                {appointment.adminAlert?.status && (
+                  <small>Personal alert: {appointment.adminAlert.status === "dead_letter" ? "Failed" : appointment.adminAlert.status.charAt(0).toUpperCase() + appointment.adminAlert.status.slice(1)}</small>
+                )}
               </td>
               {actions && <td className="row-actions">{actions(appointment)}</td>}
             </tr>

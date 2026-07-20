@@ -15,6 +15,7 @@ import { acquireDisposableTestMongo } from "./lib/test-mongodb.js";
 import { runSafeMigrations } from "../server/db/migrations.js";
 import { issueAuthSession, rotateAuthSession } from "../server/services/authSessionService.js";
 import { acquireInvariantLock } from "../server/services/adminInvariantService.js";
+import { buildAdminAlertParameters, queueAdminAppointmentAlert } from "../server/services/adminAlertService.js";
 
 async function attemptSuperAdminDemotion(userId) {
   const session = await mongoose.startSession();
@@ -57,6 +58,11 @@ async function run() {
   while (["Saturday", "Sunday"].includes(dayName(testDate))) testDate = addDaysIso(testDate, 1);
   const rangeDate = addDaysIso(testDate, 1);
   const chatPhone = "+923000009999";
+  const originalFetch = global.fetch;
+  const originalAdminAlertEnv = Object.fromEntries([
+    "WHATSAPP_ADMIN_ALERT_ENABLED", "WHATSAPP_ADMIN_ALERT_NUMBER", "WHATSAPP_ADMIN_ALERT_TEMPLATE", "WHATSAPP_ADMIN_ALERT_LANGUAGE",
+    "WHATSAPP_API_VERSION", "WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_BUSINESS_ACCOUNT_ID", "WHATSAPP_VERIFY_TOKEN", "META_APP_SECRET"
+  ].map((key) => [key, process.env[key]]));
 
   try {
     await setupClinic();
@@ -257,6 +263,65 @@ async function run() {
     afterChange = await getAvailability({ locationId, date: testDate });
     assert.equal(afterChange.slots.find((slot) => slot.time === "10:30").available, true);
 
+    Object.assign(process.env, {
+      WHATSAPP_ADMIN_ALERT_ENABLED: "true",
+      WHATSAPP_ADMIN_ALERT_NUMBER: "923001234567",
+      WHATSAPP_ADMIN_ALERT_TEMPLATE: "apointment_book_system_",
+      WHATSAPP_ADMIN_ALERT_LANGUAGE: "en",
+      WHATSAPP_API_VERSION: "v25.0",
+      WHATSAPP_ACCESS_TOKEN: "controlled-integration-token",
+      WHATSAPP_PHONE_NUMBER_ID: "123456789",
+      WHATSAPP_BUSINESS_ACCOUNT_ID: "987654321",
+      WHATSAPP_VERIFY_TOKEN: "controlled-integration-verify",
+      META_APP_SECRET: "m".repeat(64)
+    });
+    let adminAlertPayload;
+    global.fetch = async (_url, options) => {
+      adminAlertPayload = JSON.parse(options.body);
+      return new Response(JSON.stringify({ messages: [{ id: `wamid.${runId}.admin` }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    };
+    await assert.rejects(createAppointment({ ...payload("+923000000104", "QA Patient Failed"), time: "08:00" }, actor));
+    assert.equal(await models.NotificationOutbox.countDocuments({ notificationType: "ADMIN_NEW_APPOINTMENT_ALERT" }), 0);
+    const alertAppointment = await createAppointment(payload("+923000000103", "QA Patient Alert"), actor);
+    const deadline = Date.now() + 3000;
+    let adminAlert;
+    while (Date.now() < deadline) {
+      adminAlert = await models.NotificationOutbox.findOne({ appointmentId: alertAppointment.appointmentId }).lean();
+      if (adminAlert?.status === "sent") break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(adminAlert?.status, "sent");
+    assert.equal(adminAlert.providerMessageId, `wamid.${runId}.admin`);
+    assert.deepEqual(adminAlert.templateParameters, buildAdminAlertParameters(alertAppointment));
+    assert.deepEqual(adminAlertPayload.template.components[0].parameters.map((item) => item.text), buildAdminAlertParameters(alertAppointment));
+    await queueAdminAppointmentAlert(alertAppointment);
+    assert.equal(await models.NotificationOutbox.countDocuments({ appointmentId: alertAppointment.appointmentId }), 1);
+    assert.equal((await models.Appointment.findOne({ appointmentId: alertAppointment.appointmentId }).lean()).status, "Booked");
+
+    global.fetch = async () => new Response(JSON.stringify({ error: { code: 2, message: "controlled temporary failure" } }), {
+      status: 503,
+      headers: { "content-type": "application/json" }
+    });
+    const alertFailureAppointment = await createAppointment({
+      ...payload("+923000000105", "QA Patient Alert Failure"),
+      time: "10:30"
+    }, actor);
+    const failureDeadline = Date.now() + 3000;
+    let failedAdminAlert;
+    while (Date.now() < failureDeadline) {
+      failedAdminAlert = await models.NotificationOutbox.findOne({ appointmentId: alertFailureAppointment.appointmentId }).lean();
+      if (failedAdminAlert?.status === "failed") break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(failedAdminAlert?.status, "failed");
+    assert.ok(failedAdminAlert.nextRetryAt instanceof Date);
+    assert.equal((await models.Appointment.findOne({ appointmentId: alertFailureAppointment.appointmentId }).lean()).status, "Booked");
+    assert.equal(await models.NotificationOutbox.countDocuments({ appointmentId: alertFailureAppointment.appointmentId }), 1);
+    global.fetch = originalFetch;
+
     const legacyPatient = await models.Patient.create({
       patientId: `${runId}-LEGACY-PAT`,
       fullName: "Legacy Family Patient",
@@ -356,15 +421,23 @@ async function run() {
       reschedulingAndCancellation: true,
       patientMigrationIdempotency: true,
       refreshRotationAndReuseRevocation: true,
-      lastSuperAdminConcurrency: true
+      lastSuperAdminConcurrency: true,
+      adminAppointmentAlertOutbox: true
     });
   } finally {
+    global.fetch = originalFetch;
+    for (const [key, value] of Object.entries(originalAdminAlertEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     const configuredClinic = await models.ClinicLocation.findOne({ slug: VERIFIED_CLINIC.slug }).select("locationId").lean();
     const patients = await models.Patient.find({ fullName: /^QA Patient/ }).select("patientId normalizedPhone").lean();
+    const testAppointments = await models.Appointment.find({ locationId }).select("appointmentId").lean();
     const patientIds = patients.map((item) => item.patientId);
     const phones = patients.map((item) => item.normalizedPhone);
     await Promise.all([
       models.Appointment.deleteMany({ locationId }),
+      models.NotificationOutbox.deleteMany({ appointmentId: { $in: testAppointments.map((item) => item.appointmentId) } }),
       models.Patient.deleteMany({ patientId: { $in: patientIds } }),
       models.WhatsAppConsent.deleteMany({ normalizedPhone: { $in: phones } }),
       models.SpecialSchedule.deleteMany({ locationId }),
