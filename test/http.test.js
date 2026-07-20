@@ -203,6 +203,37 @@ test("successful login atomically resets failures and logout/relogin works immed
   }
 });
 
+test("repeated appointment reads are not consumed by the booking-write limiter", async () => {
+  const originalUserFindOne = models.User.findOne;
+  const originalAppointmentFind = models.Appointment.find;
+  const user = {
+    userId: "USR-APPOINTMENT-READ-QA",
+    name: "Appointment Read QA",
+    email: "appointment-read@example.invalid",
+    role: "Super Admin",
+    status: "Active"
+  };
+  models.User.findOne = () => ({ lean: async () => user });
+  models.Appointment.find = () => ({
+    sort: () => ({
+      limit: () => ({ lean: async () => [] })
+    })
+  });
+  try {
+    const token = signAccessToken(user);
+    for (let request = 1; request <= 20; request += 1) {
+      const response = await fetch(`${baseUrl}/api/appointments`, {
+        headers: { authorization: `Bearer ${token}`, "x-forwarded-for": "203.0.113.70" }
+      });
+      assert.equal(response.status, 200, `appointment read ${request} should not be booking-limited`);
+      assert.deepEqual(await response.json(), { appointments: [] });
+    }
+  } finally {
+    models.User.findOne = originalUserFindOne;
+    models.Appointment.find = originalAppointmentFind;
+  }
+});
+
 test("public clinic information omits internal pending qualifications", async () => {
   const originalLocationFind = models.ClinicLocation.find;
   const originalScheduleFind = models.ScheduleRule.find;

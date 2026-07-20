@@ -129,6 +129,7 @@ function AdminApp() {
   const [view, setView] = useState("today");
   const [data, setData] = useState(initialData);
   const [loading, setLoading] = useState(true);
+  const [appointmentsLoading, setAppointmentsLoading] = useState(false);
   const [notice, setNotice] = useState("");
 
   const api = useCallback(
@@ -153,9 +154,20 @@ function AdminApp() {
 
   const loadData = useCallback(async () => {
     if (!token) return;
+    setAppointmentsLoading(true);
+    const appointmentsRequest = api("/appointments")
+      .then((result) => {
+        setData((current) => ({ ...current, appointments: result.appointments || [] }));
+        return result;
+      })
+      .catch(() => {
+        setNotice("Appointments could not be refreshed. Your saved records have not been removed. Please try Refresh again.");
+        return null;
+      })
+      .finally(() => setAppointmentsLoading(false));
+
     const results = await Promise.allSettled([
       api("/settings"),
-      api("/appointments"),
       api("/slots/blocked"),
       api("/slots/special"),
       api("/whatsapp/logs"),
@@ -164,15 +176,16 @@ function AdminApp() {
     ]);
     const value = (index, fallback) => (results[index].status === "fulfilled" ? results[index].value : fallback);
     const settings = value(0, {});
-    setData({
-      settings: settings.product ? settings : null,
-      appointments: value(1, {}).appointments || [],
-      blockedSlots: value(2, {}).blockedSlots || [],
-      specialSchedules: value(3, {}).specialSchedules || [],
-      messageLogs: value(4, {}).messageLogs || [],
-      auditLogs: value(5, {}).auditLogs || [],
-      users: value(6, {}).users || []
-    });
+    await appointmentsRequest;
+    setData((current) => ({
+      settings: settings.product ? settings : current.settings,
+      appointments: current.appointments,
+      blockedSlots: value(1, {}).blockedSlots || [],
+      specialSchedules: value(2, {}).specialSchedules || [],
+      messageLogs: value(3, {}).messageLogs || [],
+      auditLogs: value(4, {}).auditLogs || [],
+      users: value(5, {}).users || []
+    }));
   }, [api, token, user?.role]);
 
   useEffect(() => {
@@ -235,6 +248,7 @@ function AdminApp() {
     setToken("");
     setUser(null);
     setData(initialData);
+    setAppointmentsLoading(false);
   };
 
   if (loading) return <LoadingScreen />;
@@ -297,8 +311,8 @@ function AdminApp() {
           </div>
         </header>
         <section className="content">
-          {view === "today" && <TodayView appointments={data.appointments} />}
-          {view === "appointments" && <AppointmentsView appointments={data.appointments} api={api} refresh={loadData} flash={flash} />}
+          {view === "today" && <TodayView appointments={data.appointments} loading={appointmentsLoading} />}
+          {view === "appointments" && <AppointmentsView appointments={data.appointments} loading={appointmentsLoading} api={api} refresh={loadData} flash={flash} />}
           {view === "add" && <AddAppointmentView settings={data.settings} api={api} refresh={loadData} flash={flash} />}
           {view === "calendar" && <AvailabilityCalendarView settings={data.settings} api={api} />}
           {view === "doctor" && <DoctorProfileView settings={data.settings} api={api} refresh={loadData} flash={flash} />}
@@ -431,7 +445,7 @@ function BootstrapScreen({ onSubmit }) {
   );
 }
 
-function TodayView({ appointments }) {
+function TodayView({ appointments, loading }) {
   const today = todayIso();
   const todaysAppointments = appointments.filter((appointment) => appointment.date === today);
   const active = todaysAppointments.filter((appointment) => ["Booked", "Rescheduled"].includes(appointment.status));
@@ -454,7 +468,7 @@ function TodayView({ appointments }) {
             <p>Only real bookings saved in MongoDB appear here.</p>
           </div>
         </div>
-        <AppointmentTable appointments={todaysAppointments} />
+        <AppointmentTable appointments={todaysAppointments} loading={loading} />
       </section>
     </div>
   );
@@ -472,7 +486,7 @@ function Stat({ icon: Icon, label, value, tone = "" }) {
   );
 }
 
-function AppointmentsView({ appointments, api, refresh, flash }) {
+function AppointmentsView({ appointments, loading, api, refresh, flash }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [reschedule, setReschedule] = useState(null);
@@ -541,6 +555,7 @@ function AppointmentsView({ appointments, api, refresh, flash }) {
         </div>
         <AppointmentTable
           appointments={filtered}
+          loading={loading}
           actions={(appointment) => (
             <>
               <button title="Reschedule" disabled={actionLoading === appointment.appointmentId} onClick={() => setReschedule(appointment)}>
@@ -564,7 +579,8 @@ function AppointmentsView({ appointments, api, refresh, flash }) {
   );
 }
 
-function AppointmentTable({ appointments, actions }) {
+function AppointmentTable({ appointments, actions, loading = false }) {
+  if (loading && !appointments.length) return <div className="empty-state">Loading appointments…</div>;
   if (!appointments.length) return <EmptyState />;
   return (
     <div className="table-wrap">
