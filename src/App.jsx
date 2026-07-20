@@ -840,7 +840,7 @@ function AppointmentTable({ appointments, actions, loading = false, selectable =
               {selectable && <td><input type="checkbox" aria-label={`Select appointment ${appointment.appointmentId}`} checked={selectedIds.includes(appointment.appointmentId)} onChange={() => onToggle(appointment.appointmentId)} /></td>}
               <td>
                 <strong>{appointment.patientName}</strong>
-                <small>{appointment.maskedPhone || appointment.normalizedPhone}</small>
+                <small>{appointment.normalizedPhone || appointment.maskedPhone}</small>
               </td>
               <td>{appointment.appointmentId}</td>
               <td>{displayDate(appointment.date)}</td>
