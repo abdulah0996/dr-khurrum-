@@ -502,6 +502,7 @@ function AppointmentsView({ appointments, loading, api, refresh, flash }) {
   }, [appointments, q, requiresOnly, status]);
 
   const markStatus = async (appointment, nextStatus) => {
+    if (nextStatus === "No-Show" && !window.confirm(`Mark ${appointment.appointmentId} as No-Show? Only confirm if the patient missed the scheduled appointment.`)) return;
     setActionLoading(appointment.appointmentId);
     try {
       await api(`/appointments/${appointment.appointmentId}/status`, { method: "POST", body: { status: nextStatus } });

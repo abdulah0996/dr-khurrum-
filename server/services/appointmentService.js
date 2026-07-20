@@ -420,6 +420,19 @@ export async function cancelAppointment(input, actor = null, req = null) {
 }
 
 export async function updateAppointmentStatus(appointmentId, status, actor = null, req = null) {
+  const existing = await models.Appointment.findOne({ appointmentId }).lean();
+  if (!existing) {
+    const error = new Error("Appointment was not found.");
+    error.status = 404;
+    throw error;
+  }
+
+  if (status === "No-Show" && minutesUntilLocalAppointment(existing.date, existing.time) > 0) {
+    const error = new Error("A future appointment cannot be marked No-Show. Wait until its scheduled time has passed.");
+    error.status = 409;
+    throw error;
+  }
+
   const updates = { status };
   if (!["Booked", "Rescheduled"].includes(status)) {
     updates.requiresReschedule = false;

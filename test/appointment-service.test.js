@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import mongoose from "mongoose";
 import { VERIFIED_CLINIC, VERIFIED_GENERAL_SCHEDULE } from "../server/config/clinic.js";
 import { models } from "../server/models/index.js";
-import { cancelAppointment, createAppointment, rescheduleAppointment, toPublicAppointment } from "../server/services/appointmentService.js";
+import { cancelAppointment, createAppointment, rescheduleAppointment, toPublicAppointment, updateAppointmentStatus } from "../server/services/appointmentService.js";
 import { addDaysIso, dayName, todayIso } from "../server/utils/time.js";
 
 const originals = {
@@ -160,6 +160,22 @@ test("patient cancellation and rescheduling are blocked inside the two-hour cuto
     ),
     (error) => error.status === 409 && error.patientSafe === true && /within two hours/i.test(error.message)
   );
+});
+
+test("a future appointment cannot be accidentally marked No-Show", async () => {
+  const future = appointment({ date: nextWorkingDate(), time: "09:00" });
+  let updateCalls = 0;
+  models.Appointment.findOne = () => query(future);
+  models.Appointment.findOneAndUpdate = () => {
+    updateCalls += 1;
+    return query({ ...future, status: "No-Show" });
+  };
+
+  await assert.rejects(
+    updateAppointmentStatus(future.appointmentId, "No-Show", { role: "Super Admin", userId: "USR-QA" }),
+    (error) => error.status === 409 && /future appointment cannot be marked No-Show/i.test(error.message)
+  );
+  assert.equal(updateCalls, 0);
 });
 
 test("rescheduling validates and atomically records the old and new slot", async () => {
