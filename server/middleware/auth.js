@@ -16,8 +16,7 @@ export function signAccessToken(user) {
       userId: user.userId,
       email: user.email,
       role: user.role,
-      name: user.name,
-      tokenVersion: Number(user.tokenVersion || 0)
+      name: user.name
     },
     process.env.JWT_ACCESS_SECRET,
     tokenOptions()
@@ -50,7 +49,7 @@ export async function authenticate(req, res, next) {
       algorithms: ["HS256"]
     });
     const user = await models.User.findOne({ userId: payload.userId, status: "Active" }).lean();
-    if (!user || Number(payload.tokenVersion || 0) !== Number(user.tokenVersion || 0)) return res.status(401).json({ message: "User not found, inactive, or session revoked." });
+    if (!user) return res.status(401).json({ message: "User not found or inactive." });
     req.user = publicUser(user);
     return next();
   } catch {

@@ -107,31 +107,3 @@ test("affected appointments are flagged instead of deleted or cancelled", async 
   assert.equal(JSON.stringify(update).includes("delete"), false);
   assert.equal(JSON.stringify(update).includes("Cancelled"), false);
 });
-
-test("impact evaluation and updates continue beyond one thousand appointments", async () => {
-  appointments = Array.from({ length: 1205 }, (_, index) => ({
-    appointmentId: `APT-LARGE-${index}`,
-    patientName: `Patient ${index}`,
-    locationId: "LOC-IMPACT",
-    locationNameEn: "Clinic",
-    date: monday,
-    time: "09:00",
-    tokenNumber: 1,
-    status: "Booked"
-  }));
-  let calls = 0;
-  models.Appointment.updateMany = async (filter) => {
-    calls += 1;
-    return { matchedCount: filter.appointmentId.$in.length, modifiedCount: filter.appointmentId.$in.length };
-  };
-  try {
-    const impact = await getActivationImpact({ active: false });
-    assert.equal(impact.count, 1205);
-    assert.equal(impact.truncated, true);
-    const result = await flagAppointmentsForReschedule(impact, "Doctor inactive");
-    assert.deepEqual(result, { matchedCount: 1205, modifiedCount: 1205 });
-    assert.equal(calls, 3);
-  } finally {
-    models.Appointment.updateMany = originals.Appointment.updateMany;
-  }
-});

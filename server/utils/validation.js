@@ -8,10 +8,6 @@ const text = (max = 160) =>
     .trim()
     .transform((value) => compactText(value, max));
 
-export const strictBooleanSchema = z
-  .union([z.boolean(), z.enum(["true", "false"])])
-  .transform((value) => value === true || value === "true");
-
 export function isValidPatientName(value = "") {
   const normalized = compactText(value, 100);
   if (normalized.length < 2 || normalized.length > 100) return false;
@@ -41,7 +37,6 @@ export const objectIdSchema = z.string().trim().min(12).max(40);
 
 export const appointmentCreateSchema = z
   .object({
-    patientId: z.string().trim().min(6).max(80).optional(),
     fullName: text(100).refine(isValidPatientName, "Please enter a valid patient name."),
     phone: phoneSchema,
     age: z.coerce.number().int().min(1).max(120),
@@ -53,7 +48,7 @@ export const appointmentCreateSchema = z
     time: timeSchema,
     language: languageSchema.optional(),
     source: z.enum(["WhatsApp", "WhatsApp Cloud API", "Reception", "Patient Web Chat"]).optional(),
-    consentAccepted: strictBooleanSchema.refine(Boolean, "Patient consent or staff attestation is required.")
+    consentAccepted: z.coerce.boolean().refine(Boolean, "Patient consent is required.")
   })
   .strict();
 
@@ -89,16 +84,7 @@ export const adminStatusSchema = z
     status: z.enum(APPOINTMENT_STATUSES),
     reason: text(250).optional()
   })
-  .strict()
-  .superRefine((value, context) => {
-    if (value.status === "No-Show" && (!value.reason || value.reason.trim().length < 3)) {
-      context.addIssue({
-        code: "custom",
-        path: ["reason"],
-        message: "A brief verification note is required when marking an appointment No-Show."
-      });
-    }
-  });
+  .strict();
 
 export const loginSchema = z
   .object({
@@ -158,7 +144,7 @@ export const locationSchema = z
     consultationMode: text(80).optional(),
     consultationFee: z.coerce.number().min(0).nullable().optional(),
     timezone: z.string().trim().min(1).max(80).optional(),
-    active: strictBooleanSchema.optional()
+    active: z.coerce.boolean().optional()
   })
   .strict();
 
@@ -177,7 +163,7 @@ const scheduleBreakSchema = z
 const dayRuleSchema = z
   .object({
     day: z.enum(weekdays),
-    working: strictBooleanSchema,
+    working: z.coerce.boolean(),
     openingTime: timeSchema,
     closingTime: timeSchema,
     slotDurationMinutes: z.coerce.number().int().min(5).max(120),
@@ -194,7 +180,6 @@ const dayRuleSchema = z
       return;
     }
     const sortedBreaks = [...rule.breaks].sort((left, right) => toMinutes(left.startTime) - toMinutes(right.startTime));
-    let breakMinutes = 0;
     sortedBreaks.forEach((item, index) => {
       const start = toMinutes(item.startTime);
       const end = toMinutes(item.endTime);
@@ -204,17 +189,7 @@ const dayRuleSchema = z
       if (index && start < toMinutes(sortedBreaks[index - 1].endTime)) {
         context.addIssue({ code: "custom", path: ["breaks", index], message: "Breaks must not overlap." });
       }
-      if ((start - opening) % rule.slotDurationMinutes !== 0 || (end - opening) % rule.slotDurationMinutes !== 0) {
-        context.addIssue({ code: "custom", path: ["breaks", index], message: "Break times must align with slot boundaries." });
-      }
-      if (end > start) breakMinutes += end - start;
     });
-    const availableMinutes = closing - opening - breakMinutes;
-    if (availableMinutes <= 0 || availableMinutes % rule.slotDurationMinutes !== 0) {
-      context.addIssue({ code: "custom", path: ["slotDurationMinutes"], message: "Clinic hours must divide into complete appointment slots." });
-    } else if (rule.dailyLimit > availableMinutes / rule.slotDurationMinutes) {
-      context.addIssue({ code: "custom", path: ["dailyLimit"], message: "Daily limit exceeds the number of available slots." });
-    }
   });
 
 export const scheduleSchema = z
@@ -230,7 +205,7 @@ export const scheduleSchema = z
     dailyLimit: z.coerce.number().int().min(1).max(200),
     timezone: z.string().trim().min(1).max(80).optional(),
     dayRules: z.array(dayRuleSchema).max(7).optional(),
-    active: strictBooleanSchema.optional()
+    active: z.coerce.boolean().optional()
   })
   .strict()
   .superRefine((schedule, context) => {
@@ -287,11 +262,11 @@ export const blockedSlotSchema = z
     dateEnd: dateSchema.or(z.literal("")).optional(),
     startTime: timeSchema.or(z.literal("")).optional(),
     endTime: timeSchema.or(z.literal("")).optional(),
-    fullDay: strictBooleanSchema.default(false),
+    fullDay: z.coerce.boolean().default(false),
     reason: text(250).refine((value) => value.length >= 2, "Reason is required."),
     reasonUr: text(250).optional(),
     leaveType: z.enum(["Leave", "Holiday", "Emergency", "Maintenance", "Other"]).optional(),
-    requiresReschedule: strictBooleanSchema.optional()
+    requiresReschedule: z.coerce.boolean().optional()
   })
   .strict()
   .superRefine((block, context) => {
@@ -312,7 +287,7 @@ export const specialScheduleSchema = z
   .object({
     locationId: z.string().trim().min(1).max(80),
     date: dateSchema,
-    working: strictBooleanSchema,
+    working: z.coerce.boolean(),
     openingTime: timeSchema,
     closingTime: timeSchema,
     slotDurationMinutes: z.coerce.number().int().min(5).max(120),
@@ -320,7 +295,7 @@ export const specialScheduleSchema = z
     breaks: z.array(scheduleBreakSchema).max(8).default([]),
     labelEn: text(120).optional(),
     labelUr: text(120).optional(),
-    active: strictBooleanSchema.optional()
+    active: z.coerce.boolean().optional()
   })
   .strict()
   .superRefine((value, context) => {
@@ -357,7 +332,7 @@ export const doctorProfileSchema = z
       titleUr: text(160).optional()
     }).strict()).max(50).default([]),
     profileImage: z.string().trim().url().or(z.literal("")).default(""),
-    active: strictBooleanSchema
+    active: z.coerce.boolean()
   })
   .strict();
 

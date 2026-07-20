@@ -16,14 +16,12 @@ function safeImpactItem(item) {
   };
 }
 
-function futureAppointmentsSource(query = {}) {
-  const requestedDate = query.date;
-  const result = models.Appointment.find({
+async function futureAppointments(query = {}) {
+  return models.Appointment.find({
     ...query,
-    date: typeof requestedDate === "string" ? requestedDate : { $gte: todayIso(), ...(requestedDate || {}) },
+    date: { $gte: todayIso() },
     status: { $in: ACTIVE_STATUSES }
-  }).sort({ date: 1, time: 1, _id: 1 }).lean();
-  return typeof result.cursor === "function" ? result.cursor({ batchSize: 250 }) : result;
+  }).sort({ date: 1, time: 1 }).limit(1000).lean();
 }
 
 function impactResult(items) {
@@ -35,15 +33,6 @@ function impactResult(items) {
     truncated: safe.length > 200,
     affectedDates: [...new Set(safe.map((item) => item.date))]
   };
-}
-
-async function evaluateFutureAppointments(query, predicate = () => true) {
-  const affected = [];
-  const source = await futureAppointmentsSource(query);
-  for await (const appointment of source) {
-    if (await predicate(appointment)) affected.push(appointment);
-  }
-  return impactResult(affected);
 }
 
 export function toPublicImpact(impact) {
@@ -58,37 +47,25 @@ function appointmentFitsSchedule(appointment, schedule, specialSchedule = null) 
 }
 
 export async function getScheduleChangeImpact(locationId, proposedSchedule) {
-  const specials = await models.SpecialSchedule.find({ locationId, date: { $gte: todayIso() }, active: true }).lean();
+  const appointments = await futureAppointments({ locationId });
+  if (!appointments.length) return impactResult([]);
+  const dates = [...new Set(appointments.map((item) => item.date))];
+  const specials = await models.SpecialSchedule.find({ locationId, date: { $in: dates }, active: true }).lean();
   const byDate = new Map(specials.map((item) => [item.date, item]));
   const normalizedSchedule = { ...proposedSchedule, active: proposedSchedule.active ?? true };
-  return evaluateFutureAppointments(
-    { locationId },
-    (item) => !appointmentFitsSchedule(item, normalizedSchedule, byDate.get(item.date) || null)
-  );
+  return impactResult(appointments.filter((item) => !appointmentFitsSchedule(item, normalizedSchedule, byDate.get(item.date) || null)));
 }
 
 export async function getSpecialScheduleImpact(proposedSpecial) {
   const schedule = await models.ScheduleRule.findOne({ locationId: proposedSpecial.locationId, active: true }).lean();
-  return evaluateFutureAppointments(
-    { locationId: proposedSpecial.locationId, date: proposedSpecial.date },
-    (item) => !appointmentFitsSchedule(item, schedule, { ...proposedSpecial, active: true })
-  );
-}
-
-export async function getSpecialScheduleRemovalImpact(specialScheduleId) {
-  const special = await models.SpecialSchedule.findOne({ specialScheduleId, active: true }).lean();
-  if (!special) return null;
-  const schedule = await models.ScheduleRule.findOne({ locationId: special.locationId, active: true }).lean();
-  const impact = await evaluateFutureAppointments(
-    { locationId: special.locationId, date: special.date },
-    (item) => !appointmentFitsSchedule(item, schedule, null)
-  );
-  return { special, impact };
+  const appointments = await futureAppointments({ locationId: proposedSpecial.locationId });
+  return impactResult(appointments.filter((item) => item.date === proposedSpecial.date && !appointmentFitsSchedule(item, schedule, { ...proposedSpecial, active: true })));
 }
 
 export async function getBlockedSlotImpact(block) {
+  const appointments = await futureAppointments({ locationId: block.locationId });
   const endDate = block.dateEnd || block.date;
-  return evaluateFutureAppointments({ locationId: block.locationId, date: { $gte: block.date, $lte: endDate } }, (item) => {
+  const affected = appointments.filter((item) => {
     if (item.date < block.date || item.date > endDate) return false;
     if (block.fullDay) return true;
     const time = toMinutes(item.time);
@@ -96,25 +73,19 @@ export async function getBlockedSlotImpact(block) {
     const end = toMinutes(block.endTime);
     return time !== null && start !== null && end !== null && time >= start && time < end;
   });
+  return impactResult(affected);
 }
 
 export async function getActivationImpact({ locationId = "", active = true } = {}) {
   if (active) return impactResult([]);
-  return evaluateFutureAppointments(locationId ? { locationId } : {});
+  return impactResult(await futureAppointments(locationId ? { locationId } : {}));
 }
 
 export async function flagAppointmentsForReschedule(impact, reason) {
   const appointmentIds = impact?.appointmentIds || [];
   if (!appointmentIds.length) return { matchedCount: 0, modifiedCount: 0 };
-  let matchedCount = 0;
-  let modifiedCount = 0;
-  for (let offset = 0; offset < appointmentIds.length; offset += 500) {
-    const result = await models.Appointment.updateMany(
-      { appointmentId: { $in: appointmentIds.slice(offset, offset + 500) }, status: { $in: ACTIVE_STATUSES } },
-      { $set: { requiresReschedule: true, rescheduleReason: String(reason || "Schedule changed").slice(0, 250) } }
-    );
-    matchedCount += result.matchedCount || 0;
-    modifiedCount += result.modifiedCount || 0;
-  }
-  return { matchedCount, modifiedCount };
+  return models.Appointment.updateMany(
+    { appointmentId: { $in: appointmentIds }, status: { $in: ACTIVE_STATUSES } },
+    { $set: { requiresReschedule: true, rescheduleReason: String(reason || "Schedule changed").slice(0, 250) } }
+  );
 }

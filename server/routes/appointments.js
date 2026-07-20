@@ -4,7 +4,6 @@ import {
   createAppointment,
   getAppointmentById,
   listAppointments,
-  listAppointmentsPage,
   lookupAppointmentSafe,
   rescheduleAppointment,
   updateAppointmentStatus
@@ -12,9 +11,6 @@ import {
 import { sendAppointmentWhatsApp } from "../services/whatsappService.js";
 import { appointmentConfirmation, cancellationConfirmation, rescheduleConfirmation } from "../services/messageTemplates.js";
 import { DOCTOR } from "../config/clinic.js";
-import { requireRole } from "../middleware/auth.js";
-import { retryAdminAppointmentAlert } from "../services/adminAlertService.js";
-import { addAuditLogSafely } from "../services/auditService.js";
 import { adminStatusSchema, appointmentCancelSchema, appointmentCreateSchema, appointmentLookupSchema, appointmentRescheduleSchema } from "../utils/validation.js";
 
 const router = Router();
@@ -29,7 +25,8 @@ function appointmentReminder(appointment, language = "en") {
 
 router.get("/", async (req, res, next) => {
   try {
-    res.json(await listAppointmentsPage(req.query));
+    const appointments = await listAppointments(req.query);
+    res.json({ appointments });
   } catch (error) {
     next(error);
   }
@@ -58,7 +55,7 @@ router.post("/lookup", async (req, res, next) => {
 
 router.post("/", async (req, res, next) => {
   try {
-    const parsed = appointmentCreateSchema.parse({ ...req.body, source: req.body.source || "Reception" });
+    const parsed = appointmentCreateSchema.parse({ ...req.body, source: req.body.source || "Reception", consentAccepted: true });
     const appointment = await createAppointment(parsed, req.user, req);
     const whatsapp = await sendAppointmentWhatsApp({
       appointment,
@@ -125,27 +122,10 @@ router.post("/:appointmentId/reminder", async (req, res, next) => {
   }
 });
 
-router.post("/:appointmentId/admin-alert/retry", requireRole("Super Admin", "Receptionist"), async (req, res, next) => {
-  try {
-    const adminAlert = await retryAdminAppointmentAlert(req.params.appointmentId);
-    await addAuditLogSafely({
-      actor: req.user,
-      action: "Admin appointment alert retry requested",
-      module: "WhatsApp",
-      targetType: "Appointment",
-      targetId: req.params.appointmentId,
-      req
-    });
-    res.json({ adminAlert });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post("/:appointmentId/status", requireRole("Super Admin", "Receptionist"), async (req, res, next) => {
+router.post("/:appointmentId/status", async (req, res, next) => {
   try {
     const parsed = adminStatusSchema.parse(req.body);
-    const appointment = await updateAppointmentStatus(req.params.appointmentId, parsed.status, req.user, req, parsed.reason);
+    const appointment = await updateAppointmentStatus(req.params.appointmentId, parsed.status, req.user, req);
     res.json({ appointment });
   } catch (error) {
     next(error);

@@ -1,8 +1,6 @@
 import "dotenv/config";
 // This check is intentionally separate from the fast, database-free unit suite.
 import assert from "node:assert/strict";
-import bcrypt from "bcryptjs";
-import mongoose from "mongoose";
 import { connectDatabase, disconnectDatabase } from "../server/db/connection.js";
 import { models } from "../server/models/index.js";
 import { VERIFIED_CLINIC } from "../server/config/clinic.js";
@@ -11,41 +9,21 @@ import { handleChatMessage, resumeChatSession } from "../server/services/chatbot
 import { getAvailability } from "../server/services/slotService.js";
 import { addDaysIso, dayName, todayIso } from "../server/utils/time.js";
 import { setupClinic } from "./setup-clinic.js";
-import { acquireDisposableTestMongo } from "./lib/test-mongodb.js";
-import { runSafeMigrations } from "../server/db/migrations.js";
-import { issueAuthSession, rotateAuthSession } from "../server/services/authSessionService.js";
-import { acquireInvariantLock } from "../server/services/adminInvariantService.js";
-import { buildAdminAlertParameters, queueAdminAppointmentAlert } from "../server/services/adminAlertService.js";
 
-async function attemptSuperAdminDemotion(userId) {
-  const session = await mongoose.startSession();
-  try {
-    return await session.withTransaction(async () => {
-      await acquireInvariantLock("active-super-admin-invariant", session);
-      const others = await models.User.countDocuments({
-        userId: { $ne: userId },
-        role: "Super Admin",
-        status: "Active"
-      }).session(session);
-      if (others === 0) throw new Error("final active Super Admin");
-      await models.User.updateOne({ userId }, { $set: { role: "Receptionist" } }, { session });
-      return userId;
-    });
-  } finally {
-    await session.endSession();
-  }
+function safeTestDatabaseName(uri) {
+  const match = String(uri || "").match(/\.net\/([^?]+)/i);
+  return match?.[1] || "";
 }
 
 async function run() {
-  disposableMongo = await acquireDisposableTestMongo({ databaseName: "khurrum_integration_test" });
-  const { uri, databaseName } = disposableMongo;
+  const uri = process.env.TEST_MONGODB_URI;
+  const databaseName = safeTestDatabaseName(uri);
+  if (!uri || !/_test$/i.test(databaseName)) {
+    throw new Error("TEST_MONGODB_URI must target a database whose name ends with _test. No data was changed.");
+  }
 
   process.env.MONGODB_URI = uri;
   process.env.NODE_ENV = "test";
-  process.env.RUN_PATIENT_IDENTITY_MIGRATION = "true";
-  process.env.JWT_ACCESS_SECRET ||= "x".repeat(64);
-  process.env.JWT_REFRESH_SECRET ||= "y".repeat(64);
-  process.env.COOKIE_SECRET ||= "z".repeat(64);
   await connectDatabase();
   assert.equal(models.Appointment.db.name, databaseName);
   await Promise.all(Object.values(models).map((model) => model.init()));
@@ -58,11 +36,6 @@ async function run() {
   while (["Saturday", "Sunday"].includes(dayName(testDate))) testDate = addDaysIso(testDate, 1);
   const rangeDate = addDaysIso(testDate, 1);
   const chatPhone = "+923000009999";
-  const originalFetch = global.fetch;
-  const originalAdminAlertEnv = Object.fromEntries([
-    "WHATSAPP_ADMIN_ALERT_ENABLED", "WHATSAPP_ADMIN_ALERT_NUMBER", "WHATSAPP_ADMIN_ALERT_TEMPLATE", "WHATSAPP_ADMIN_ALERT_LANGUAGE",
-    "WHATSAPP_API_VERSION", "WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_BUSINESS_ACCOUNT_ID", "WHATSAPP_VERIFY_TOKEN", "META_APP_SECRET"
-  ].map((key) => [key, process.env[key]]));
 
   try {
     await setupClinic();
@@ -262,148 +235,6 @@ async function run() {
     assert.equal(cancelledAgain.status, "Cancelled");
     afterChange = await getAvailability({ locationId, date: testDate });
     assert.equal(afterChange.slots.find((slot) => slot.time === "10:30").available, true);
-
-    Object.assign(process.env, {
-      WHATSAPP_ADMIN_ALERT_ENABLED: "true",
-      WHATSAPP_ADMIN_ALERT_NUMBER: "923001234567",
-      WHATSAPP_ADMIN_ALERT_TEMPLATE: "apointment_book_system_",
-      WHATSAPP_ADMIN_ALERT_LANGUAGE: "en",
-      WHATSAPP_API_VERSION: "v25.0",
-      WHATSAPP_ACCESS_TOKEN: "controlled-integration-token",
-      WHATSAPP_PHONE_NUMBER_ID: "123456789",
-      WHATSAPP_BUSINESS_ACCOUNT_ID: "987654321",
-      WHATSAPP_VERIFY_TOKEN: "controlled-integration-verify",
-      META_APP_SECRET: "m".repeat(64)
-    });
-    let adminAlertPayload;
-    global.fetch = async (_url, options) => {
-      adminAlertPayload = JSON.parse(options.body);
-      return new Response(JSON.stringify({ messages: [{ id: `wamid.${runId}.admin` }] }), {
-        status: 200,
-        headers: { "content-type": "application/json" }
-      });
-    };
-    await assert.rejects(createAppointment({ ...payload("+923000000104", "QA Patient Failed"), time: "08:00" }, actor));
-    assert.equal(await models.NotificationOutbox.countDocuments({ notificationType: "ADMIN_NEW_APPOINTMENT_ALERT" }), 0);
-    const alertAppointment = await createAppointment(payload("+923000000103", "QA Patient Alert"), actor);
-    const deadline = Date.now() + 3000;
-    let adminAlert;
-    while (Date.now() < deadline) {
-      adminAlert = await models.NotificationOutbox.findOne({ appointmentId: alertAppointment.appointmentId }).lean();
-      if (adminAlert?.status === "sent") break;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    assert.equal(adminAlert?.status, "sent");
-    assert.equal(adminAlert.providerMessageId, `wamid.${runId}.admin`);
-    assert.deepEqual(adminAlert.templateParameters, buildAdminAlertParameters(alertAppointment));
-    assert.deepEqual(adminAlertPayload.template.components[0].parameters.map((item) => item.text), buildAdminAlertParameters(alertAppointment));
-    await queueAdminAppointmentAlert(alertAppointment);
-    assert.equal(await models.NotificationOutbox.countDocuments({ appointmentId: alertAppointment.appointmentId }), 1);
-    assert.equal((await models.Appointment.findOne({ appointmentId: alertAppointment.appointmentId }).lean()).status, "Booked");
-
-    global.fetch = async () => new Response(JSON.stringify({ error: { code: 2, message: "controlled temporary failure" } }), {
-      status: 503,
-      headers: { "content-type": "application/json" }
-    });
-    const alertFailureAppointment = await createAppointment({
-      ...payload("+923000000105", "QA Patient Alert Failure"),
-      time: "10:30"
-    }, actor);
-    const failureDeadline = Date.now() + 3000;
-    let failedAdminAlert;
-    while (Date.now() < failureDeadline) {
-      failedAdminAlert = await models.NotificationOutbox.findOne({ appointmentId: alertFailureAppointment.appointmentId }).lean();
-      if (failedAdminAlert?.status === "failed") break;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    assert.equal(failedAdminAlert?.status, "failed");
-    assert.ok(failedAdminAlert.nextRetryAt instanceof Date);
-    assert.equal((await models.Appointment.findOne({ appointmentId: alertFailureAppointment.appointmentId }).lean()).status, "Booked");
-    assert.equal(await models.NotificationOutbox.countDocuments({ appointmentId: alertFailureAppointment.appointmentId }), 1);
-    global.fetch = originalFetch;
-
-    const legacyPatient = await models.Patient.create({
-      patientId: `${runId}-LEGACY-PAT`,
-      fullName: "Legacy Family Patient",
-      phone: "+923000008888",
-      normalizedPhone: "+923000008888",
-      age: 20,
-      gender: "Female",
-      city: "Jhang",
-      reasonForVisit: "Migration verification",
-      consentAccepted: false
-    });
-    await models.Appointment.create({
-      appointmentId: `${runId}-LEGACY-APT`,
-      patientId: legacyPatient.patientId,
-      patientName: legacyPatient.fullName,
-      phone: legacyPatient.phone,
-      normalizedPhone: legacyPatient.normalizedPhone,
-      age: legacyPatient.age,
-      gender: legacyPatient.gender,
-      city: legacyPatient.city,
-      reasonForVisit: legacyPatient.reasonForVisit,
-      locationId,
-      locationNameEn: "Integration Clinic",
-      locationNameUr: "Integration Clinic",
-      doctorName: "QA Doctor",
-      date: addDaysIso(testDate, 10),
-      time: "09:00",
-      tokenNumber: 1,
-      status: "Booked",
-      source: "Reception"
-    });
-    const firstMigration = await runSafeMigrations();
-    const secondMigration = await runSafeMigrations();
-    assert.equal(firstMigration.patientIdentities.alreadyApplied, undefined);
-    assert.equal(secondMigration.patientIdentities.alreadyApplied, true);
-    assert.ok((await models.Patient.findOne({ patientId: legacyPatient.patientId }).lean()).identityKey);
-
-    const authUser = await models.User.create({
-      userId: `${runId}-AUTH`,
-      name: "Integration Admin",
-      email: `${runId.toLowerCase()}@example.invalid`,
-      passwordHash: await bcrypt.hash("Integration-Password-42!", 4),
-      role: "Super Admin",
-      status: "Active"
-    });
-    const firstCookie = {};
-    await issueAuthSession(authUser, { cookie: (_name, value) => { firstCookie.value = value; } });
-    const rotatedCookie = {};
-    const rotated = await rotateAuthSession(
-      { headers: { cookie: `khurrum_refresh=${encodeURIComponent(firstCookie.value)}` } },
-      { cookie: (_name, value) => { rotatedCookie.value = value; } }
-    );
-    assert.ok(rotated?.token);
-    assert.notEqual(rotatedCookie.value, firstCookie.value);
-    assert.equal(await models.AuthSession.countDocuments({ userId: authUser.userId, revokedAt: null }), 1);
-    const tamperedCookie = `${rotatedCookie.value.slice(0, -1)}${rotatedCookie.value.endsWith("a") ? "b" : "a"}`;
-    assert.equal(await rotateAuthSession(
-      { headers: { cookie: `khurrum_refresh=${encodeURIComponent(tamperedCookie)}` } },
-      { cookie: () => {} }
-    ), null);
-    assert.equal(await models.AuthSession.countDocuments({ userId: authUser.userId, revokedAt: null }), 1);
-    assert.equal(await rotateAuthSession(
-      { headers: { cookie: `khurrum_refresh=${encodeURIComponent(firstCookie.value)}` } },
-      { cookie: () => {} }
-    ), null);
-    assert.equal(await models.AuthSession.countDocuments({ userId: authUser.userId, revokedAt: null }), 0);
-
-    const concurrentAdmins = await models.User.create([
-      {
-        userId: `${runId}-ADMIN-A`, name: "Concurrency Admin A", email: `${runId.toLowerCase()}-a@example.invalid`,
-        passwordHash: authUser.passwordHash, role: "Super Admin", status: "Active"
-      },
-      {
-        userId: `${runId}-ADMIN-B`, name: "Concurrency Admin B", email: `${runId.toLowerCase()}-b@example.invalid`,
-        passwordHash: authUser.passwordHash, role: "Super Admin", status: "Active"
-      }
-    ]);
-    await models.User.updateOne({ userId: authUser.userId }, { $set: { role: "Receptionist" } });
-    const demotions = await Promise.allSettled(concurrentAdmins.map((admin) => attemptSuperAdminDemotion(admin.userId)));
-    assert.equal(demotions.filter((result) => result.status === "fulfilled").length, 1);
-    assert.equal(demotions.filter((result) => result.status === "rejected").length, 1);
-    assert.equal(await models.User.countDocuments({ role: "Super Admin", status: "Active" }), 1);
     console.log("Dedicated MongoDB integration checks passed", {
       database: databaseName,
       setupIdempotency: true,
@@ -418,26 +249,15 @@ async function run() {
       immediateScheduleRefresh: true,
       dateRangeBlocking: true,
       simultaneousBookingProtection: true,
-      reschedulingAndCancellation: true,
-      patientMigrationIdempotency: true,
-      refreshRotationAndReuseRevocation: true,
-      lastSuperAdminConcurrency: true,
-      adminAppointmentAlertOutbox: true
+      reschedulingAndCancellation: true
     });
   } finally {
-    global.fetch = originalFetch;
-    for (const [key, value] of Object.entries(originalAdminAlertEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
     const configuredClinic = await models.ClinicLocation.findOne({ slug: VERIFIED_CLINIC.slug }).select("locationId").lean();
     const patients = await models.Patient.find({ fullName: /^QA Patient/ }).select("patientId normalizedPhone").lean();
-    const testAppointments = await models.Appointment.find({ locationId }).select("appointmentId").lean();
     const patientIds = patients.map((item) => item.patientId);
     const phones = patients.map((item) => item.normalizedPhone);
     await Promise.all([
       models.Appointment.deleteMany({ locationId }),
-      models.NotificationOutbox.deleteMany({ appointmentId: { $in: testAppointments.map((item) => item.appointmentId) } }),
       models.Patient.deleteMany({ patientId: { $in: patientIds } }),
       models.WhatsAppConsent.deleteMany({ normalizedPhone: { $in: phones } }),
       models.SpecialSchedule.deleteMany({ locationId }),
@@ -446,9 +266,7 @@ async function run() {
       models.ClinicLocation.deleteMany({ locationId }),
       models.DoctorProfile.deleteMany({ profileKey: runId }),
       models.ChatSession.deleteMany({ normalizedPhone: chatPhone }),
-      models.AuditLog.deleteMany({ actorUserId: runId }),
-      models.AuthSession.deleteMany({ userId: `${runId}-AUTH` }),
-      models.User.deleteMany({ userId: { $in: [`${runId}-AUTH`, `${runId}-ADMIN-A`, `${runId}-ADMIN-B`] } })
+      models.AuditLog.deleteMany({ actorUserId: runId })
     ]);
     if (configuredClinic?.locationId) {
       await models.ScheduleRule.deleteMany({ locationId: configuredClinic.locationId });
@@ -457,14 +275,11 @@ async function run() {
     await models.DoctorProfile.deleteMany({ profileKey: "primary" });
     assert.equal(await models.Appointment.countDocuments({ locationId }), 0);
     await disconnectDatabase();
-    await disposableMongo.stop();
   }
 }
 
-let disposableMongo;
 run().catch(async (error) => {
   console.error("Dedicated MongoDB integration checks failed:", error.message);
   await disconnectDatabase().catch(() => {});
-  await disposableMongo?.stop().catch(() => {});
   process.exitCode = 1;
 });

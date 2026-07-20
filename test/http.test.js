@@ -9,7 +9,7 @@ process.env.NODE_ENV = "test";
 process.env.WHATSAPP_VERIFY_TOKEN = "qa-verify-token";
 process.env.META_APP_SECRET = "f".repeat(32);
 
-const { app, skipGeneralRateLimit } = await import("../server/index.js");
+const { app } = await import("../server/index.js");
 
 let server;
 let baseUrl;
@@ -23,12 +23,6 @@ test.before(async () => {
 
 test.after(async () => {
   await new Promise((resolve) => server.close(resolve));
-});
-
-test("password login and refresh are excluded from the global API limiter", () => {
-  assert.equal(skipGeneralRateLimit({ path: "/api/auth/login" }), true);
-  assert.equal(skipGeneralRateLimit({ path: "/api/auth/refresh" }), true);
-  assert.equal(skipGeneralRateLimit({ path: "/api/auth/me" }), false);
 });
 
 test("degraded health uses a failing readiness status without exposing database details", async () => {
@@ -222,11 +216,9 @@ test("repeated appointment reads are not consumed by the booking-write limiter",
   models.User.findOne = () => ({ lean: async () => user });
   models.Appointment.find = () => ({
     sort: () => ({
-      skip: () => ({ limit: () => ({ lean: async () => [] }) })
+      limit: () => ({ lean: async () => [] })
     })
   });
-  const originalAppointmentCount = models.Appointment.countDocuments;
-  models.Appointment.countDocuments = async () => 0;
   try {
     const token = signAccessToken(user);
     for (let request = 1; request <= 20; request += 1) {
@@ -234,15 +226,11 @@ test("repeated appointment reads are not consumed by the booking-write limiter",
         headers: { authorization: `Bearer ${token}`, "x-forwarded-for": "203.0.113.70" }
       });
       assert.equal(response.status, 200, `appointment read ${request} should not be booking-limited`);
-      assert.deepEqual(await response.json(), {
-        appointments: [],
-        pagination: { page: 1, limit: 50, total: 0, totalPages: 1, hasNext: false, hasPrevious: false }
-      });
+      assert.deepEqual(await response.json(), { appointments: [] });
     }
   } finally {
     models.User.findOne = originalUserFindOne;
     models.Appointment.find = originalAppointmentFind;
-    models.Appointment.countDocuments = originalAppointmentCount;
   }
 });
 

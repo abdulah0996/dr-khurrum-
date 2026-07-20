@@ -4,7 +4,6 @@ import { requireRole } from "../middleware/auth.js";
 import { addAuditLog, listAuditLogs } from "../services/auditService.js";
 import { getDoctorProfile, listLocations, listSchedules, updateDoctorProfile, updateSchedule, upsertLocation } from "../services/clinicConfigService.js";
 import { getWhatsAppQualitySnapshot, getWhatsAppStatus } from "../services/whatsappService.js";
-import { getMetricsSnapshot } from "../services/monitoringService.js";
 import { doctorProfileSchema, locationSchema, scheduleSchema } from "../utils/validation.js";
 import {
   flagAppointmentsForReschedule,
@@ -14,10 +13,6 @@ import {
 } from "../services/scheduleImpactService.js";
 
 const router = Router();
-
-router.get("/metrics", requireRole("Super Admin"), (_req, res) => {
-  res.json({ metrics: getMetricsSnapshot() });
-});
 
 router.get("/audit-logs", requireRole("Super Admin"), async (req, res, next) => {
   try {

@@ -8,9 +8,9 @@
 - Approved bilingual profile and appointment-assistant limitation
 - Nighat Medical Complex, complete Jhang address, physical consultation
 - Reception +92 335 7504478
-- Monday–Friday 09:00–14:00; weekend closure
-- No configured break
-- 10-minute slots and a daily limit of 30
+- Monday–Friday 09:00–17:00; weekend closure
+- Daily 13:00–14:00 prayer and clinic break
+- 15-minute slots and deterministic tokens 1–28
 - 30-day booking range, 30-minute same-day cutoff, and two-hour patient cancellation/rescheduling cutoffs
 - Age-neutral booking with guardian guidance for patients under 18
 - Asia/Karachi timezone

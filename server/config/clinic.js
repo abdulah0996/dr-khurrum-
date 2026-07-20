@@ -4,13 +4,13 @@ export const VERIFIED_RECEPTION_PHONE = "+92 335 7504478";
 export const VERIFIED_GENERAL_SCHEDULE = {
   workingDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
   openingTime: "09:00",
-  closingTime: "14:00",
-  breakStart: "",
-  breakEnd: "",
-  breakReasonEn: "",
-  breakReasonUr: "",
-  slotDurationMinutes: 10,
-  dailyLimit: 30,
+  closingTime: "17:00",
+  breakStart: "13:00",
+  breakEnd: "14:00",
+  breakReasonEn: "Prayer and clinic break",
+  breakReasonUr: "نماز اور وقفے کا وقت",
+  slotDurationMinutes: 15,
+  dailyLimit: 28,
   timezone: "Asia/Karachi",
   active: true
 };
@@ -58,7 +58,7 @@ export const APPOINTMENT_POLICIES = {
   rescheduleCutoffMinutes: 120,
   arrivalLeadMinutes: 10,
   lateGraceMinutes: 10,
-  noShowAfterMinutes: Math.max(0, Math.min(Number(process.env.NO_SHOW_GRACE_MINUTES || 15), 240))
+  noShowAfterMinutes: 15
 };
 
 export const ACTIVE_APPOINTMENT_STATUSES = ["Booked", "Rescheduled"];

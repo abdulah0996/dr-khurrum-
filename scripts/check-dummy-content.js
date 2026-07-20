@@ -82,7 +82,6 @@ function walk(filePath) {
 
 const files = TARGETS.map((target) => path.join(ROOT, target)).filter(fs.existsSync).flatMap(walk);
 const findings = [];
-const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 for (const file of files) {
   const text = fs.readFileSync(file, "utf8")
@@ -94,7 +93,7 @@ for (const file of files) {
   }
   const lower = text.toLowerCase();
   for (const term of CASE_INSENSITIVE) {
-    if (new RegExp(`\\b${escapeRegex(term)}\\b`, "i").test(lower)) findings.push(`${relative}: contains "${term}"`);
+    if (lower.includes(term)) findings.push(`${relative}: contains "${term}"`);
   }
 }
 
