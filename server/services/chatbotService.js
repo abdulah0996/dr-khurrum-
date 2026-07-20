@@ -18,6 +18,7 @@ import {
 } from "./messageTemplates.js";
 import { chatMessageSchema, isValidPatientName, phoneSchema } from "../utils/validation.js";
 import { compactText, displayDate, displayTime, makePublicId, normalizePhone } from "../utils/time.js";
+import { withConversationLock } from "./conversationLockService.js";
 import { ACTIONS, dateAction, locationAction, normalizeChatAction, timeAction } from "./interactiveMessageService.js";
 import { classifyEmergencyReason } from "./emergencyClassificationService.js";
 
@@ -887,7 +888,7 @@ async function transitionChatMessage(parsed, context, session) {
 
 const interactionLocks = new Map();
 
-export async function handleChatMessage(input, context = {}) {
+async function handleChatMessageUnlocked(input, context = {}) {
   const parsed = chatMessageSchema.parse(input);
   const normalizedPhone = normalizePhone(parsed.phone);
   const hintedLanguage = parsed.language || (detectUrdu(parsed.actionId || parsed.message) ? "ur" : "en");
@@ -923,6 +924,11 @@ export async function handleChatMessage(input, context = {}) {
   } finally {
     interactionLocks.delete(lockKey);
   }
+}
+
+export async function handleChatMessage(input, context = {}) {
+  const normalizedPhone = phoneSchema.parse(input?.phone);
+  return withConversationLock(normalizedPhone, () => handleChatMessageUnlocked(input, context));
 }
 
 export async function resumeChatSession(input = {}) {

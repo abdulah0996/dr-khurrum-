@@ -36,6 +36,8 @@ const CONTACT = "+92 335 7504478";
 const initialData = {
   settings: null,
   appointments: [],
+  todaysAppointments: [],
+  appointmentPagination: { page: 1, limit: 50, total: 0, totalPages: 1, hasNext: false, hasPrevious: false },
   blockedSlots: [],
   specialSchedules: [],
   messageLogs: [],
@@ -131,20 +133,45 @@ function AdminApp() {
   const [loading, setLoading] = useState(true);
   const [appointmentsLoading, setAppointmentsLoading] = useState(false);
   const [notice, setNotice] = useState("");
+  const [sectionErrors, setSectionErrors] = useState({});
+  const refreshRequestRef = useRef(null);
+
+  const refreshAccess = useCallback(async () => {
+    if (!refreshRequestRef.current) {
+      refreshRequestRef.current = fetch("/api/auth/refresh", { method: "POST", credentials: "include" })
+        .then(readJson)
+        .then((payload) => {
+          localStorage.setItem("khurrum_chatbot_token", payload.token);
+          setToken(payload.token);
+          setUser(payload.user);
+          return payload.token;
+        })
+        .finally(() => { refreshRequestRef.current = null; });
+    }
+    return refreshRequestRef.current;
+  }, []);
 
   const api = useCallback(
     async (path, options = {}) => {
-      const response = await fetch(`/api${path}`, {
+      const request = (accessToken) => fetch(`/api${path}`, {
         method: options.method || "GET",
         headers: {
           "Content-Type": "application/json",
-          ...authHeaders(token)
+          ...authHeaders(accessToken)
         },
-        body: options.body ? JSON.stringify(options.body) : undefined
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        credentials: "include",
+        signal: options.signal
       });
+      let response = await request(token);
+      const refreshExcluded = ["/auth/login", "/auth/bootstrap", "/auth/refresh", "/auth/logout"].includes(path);
+      if (response.status === 401 && !refreshExcluded) {
+        const accessToken = await refreshAccess();
+        response = await request(accessToken);
+      }
       return readJson(response);
     },
-    [token]
+    [refreshAccess, token]
   );
 
   const flash = (message) => {
@@ -152,17 +179,40 @@ function AdminApp() {
     window.setTimeout(() => setNotice(""), 3200);
   };
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (options = {}) => {
     if (!token) return;
-    setAppointmentsLoading(true);
-    const appointmentsRequest = api("/appointments")
-      .then((result) => {
-        setData((current) => ({ ...current, appointments: result.appointments || [] }));
-        return result;
-      })
-      .catch(() => {
-        setNotice("Appointments could not be refreshed. Your saved records have not been removed. Please try Refresh again.");
-        return null;
+    const skipAppointments = options?.skipAppointments === true;
+    if (!skipAppointments) setAppointmentsLoading(true);
+    const loadAllToday = async () => {
+      const records = [];
+      const maxPages = 10;
+      for (let page = 1; page <= maxPages; page += 1) {
+        const result = await api(`/appointments?date=${encodeURIComponent(todayIso())}&page=${page}&limit=200`);
+        records.push(...(result.appointments || []));
+        if (!result.pagination?.hasNext) return { records, truncated: false };
+      }
+      return { records, truncated: true };
+    };
+    const appointmentBatch = skipAppointments ? [] : [
+      api("/appointments?page=1&limit=50"),
+      loadAllToday()
+    ];
+    const appointmentsRequest = Promise.allSettled(appointmentBatch)
+      .then((appointmentResults) => {
+        if (skipAppointments) return;
+        const [allResult, todayResult] = appointmentResults;
+        setData((current) => ({
+          ...current,
+          appointments: allResult.status === "fulfilled" ? allResult.value.appointments || [] : current.appointments,
+          todaysAppointments: todayResult.status === "fulfilled" ? todayResult.value.records : current.todaysAppointments,
+          appointmentPagination: allResult.status === "fulfilled" ? allResult.value.pagination || current.appointmentPagination : current.appointmentPagination
+        }));
+        const appointmentError = allResult.status === "rejected" ? "Appointments could not be refreshed." : "";
+        const todayError = todayResult.status === "rejected"
+          ? "Today's appointments could not be refreshed."
+          : todayResult.value.truncated ? "Today's appointment list exceeds the safe display limit. Narrow the clinic schedule and contact support." : "";
+        setSectionErrors((current) => ({ ...current, appointments: appointmentError, todaysAppointments: todayError }));
+        if (appointmentError || todayError) setNotice("Appointments could not be fully refreshed. Your saved records have not been removed. Please try Refresh again.");
       })
       .finally(() => setAppointmentsLoading(false));
 
@@ -177,14 +227,19 @@ function AdminApp() {
     const value = (index, fallback) => (results[index].status === "fulfilled" ? results[index].value : fallback);
     const settings = value(0, {});
     await appointmentsRequest;
+    const names = ["settings", "blockedSlots", "specialSchedules", "messageLogs", "auditLogs", "users"];
+    const failures = Object.fromEntries(names.map((name, index) => [name, results[index].status === "rejected" ? `${name} could not be refreshed.` : ""]));
+    setSectionErrors((current) => ({ ...current, ...failures }));
     setData((current) => ({
       settings: settings.product ? settings : current.settings,
       appointments: current.appointments,
-      blockedSlots: value(1, {}).blockedSlots || [],
-      specialSchedules: value(2, {}).specialSchedules || [],
-      messageLogs: value(3, {}).messageLogs || [],
-      auditLogs: value(4, {}).auditLogs || [],
-      users: value(5, {}).users || []
+      todaysAppointments: current.todaysAppointments,
+      appointmentPagination: current.appointmentPagination,
+      blockedSlots: results[1].status === "fulfilled" ? results[1].value.blockedSlots || [] : current.blockedSlots,
+      specialSchedules: results[2].status === "fulfilled" ? results[2].value.specialSchedules || [] : current.specialSchedules,
+      messageLogs: results[3].status === "fulfilled" ? results[3].value.messageLogs || [] : current.messageLogs,
+      auditLogs: results[4].status === "fulfilled" ? results[4].value.auditLogs || [] : current.auditLogs,
+      users: results[5].status === "fulfilled" ? results[5].value.users || [] : current.users
     }));
   }, [api, token, user?.role]);
 
@@ -219,7 +274,8 @@ function AdminApp() {
     const response = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      credentials: "include"
     });
     const payload = await readJson(response);
     localStorage.setItem("khurrum_chatbot_token", payload.token);
@@ -233,7 +289,8 @@ function AdminApp() {
     const response = await fetch("/api/auth/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      credentials: "include"
     });
     const payload = await readJson(response);
     localStorage.setItem("khurrum_chatbot_token", payload.token);
@@ -243,7 +300,8 @@ function AdminApp() {
     flash("First Super Admin created.");
   };
 
-  const logout = () => {
+  const logout = async () => {
+    await fetch("/api/auth/logout", { method: "POST", credentials: "include" }).catch(() => {});
     localStorage.removeItem("khurrum_chatbot_token");
     setToken("");
     setUser(null);
@@ -311,8 +369,9 @@ function AdminApp() {
           </div>
         </header>
         <section className="content">
-          {view === "today" && <TodayView appointments={data.appointments} loading={appointmentsLoading} />}
-          {view === "appointments" && <AppointmentsView appointments={data.appointments} loading={appointmentsLoading} api={api} refresh={loadData} flash={flash} />}
+          {Object.values(sectionErrors).some(Boolean) && <div className="form-error" role="alert">{Object.values(sectionErrors).filter(Boolean).join(" ")} Previously loaded records are still shown. <button type="button" className="ghost-button" onClick={loadData}>Retry</button></div>}
+          {view === "today" && <TodayView appointments={data.todaysAppointments} loading={appointmentsLoading} />}
+          {view === "appointments" && <AppointmentsView appointments={data.appointments} initialPagination={data.appointmentPagination} loading={appointmentsLoading} api={api} refresh={loadData} flash={flash} />}
           {view === "add" && <AddAppointmentView settings={data.settings} api={api} refresh={loadData} flash={flash} />}
           {view === "calendar" && <AvailabilityCalendarView settings={data.settings} api={api} />}
           {view === "doctor" && <DoctorProfileView settings={data.settings} api={api} refresh={loadData} flash={flash} />}
@@ -486,28 +545,103 @@ function Stat({ icon: Icon, label, value, tone = "" }) {
   );
 }
 
-function AppointmentsView({ appointments, loading, api, refresh, flash }) {
+function AppointmentsView({ appointments, initialPagination, loading, api, refresh, flash }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [reschedule, setReschedule] = useState(null);
+  const [noShowCandidate, setNoShowCandidate] = useState(null);
+  const [noShowReason, setNoShowReason] = useState("");
   const [requiresOnly, setRequiresOnly] = useState(false);
   const [actionLoading, setActionLoading] = useState("");
+  const [records, setRecords] = useState(appointments);
+  const [pagination, setPagination] = useState(initialPagination);
+  const [pageLoading, setPageLoading] = useState(false);
+  const [pageError, setPageError] = useState("");
+  const requestRef = useRef({ sequence: 0, controller: null });
+  const skipInitialSearchRef = useRef(true);
+
+  useEffect(() => { setRecords(appointments); }, [appointments]);
+  useEffect(() => { setPagination(initialPagination); }, [initialPagination]);
+
+  const loadPage = useCallback(async (page = 1) => {
+    requestRef.current.controller?.abort();
+    const controller = new AbortController();
+    const sequence = requestRef.current.sequence + 1;
+    requestRef.current = { sequence, controller };
+    setPageLoading(true);
+    setPageError("");
+    try {
+      const params = new URLSearchParams({ page: String(page), limit: "50" });
+      if (q.trim()) params.set("q", q.trim());
+      if (status) params.set("status", status);
+      if (requiresOnly) params.set("requiresReschedule", "true");
+      const result = await api(`/appointments?${params}`, { signal: controller.signal });
+      if (requestRef.current.sequence !== sequence) return;
+      setRecords(result.appointments || []);
+      setPagination(result.pagination || initialPagination);
+    } catch (error) {
+      if (error?.name !== "AbortError" && requestRef.current.sequence === sequence) {
+        setPageError(error.message || "Appointments could not be loaded. Please retry.");
+      }
+      throw error;
+    } finally {
+      if (requestRef.current.sequence === sequence) setPageLoading(false);
+    }
+  }, [api, initialPagination, q, requiresOnly, status]);
+
+  useEffect(() => {
+    if (skipInitialSearchRef.current) {
+      skipInitialSearchRef.current = false;
+      return undefined;
+    }
+    const timer = window.setTimeout(() => { loadPage(1).catch(() => {}); }, 300);
+    return () => {
+      window.clearTimeout(timer);
+      requestRef.current.controller?.abort();
+    };
+  }, [loadPage]);
+
+  useEffect(() => () => requestRef.current.controller?.abort(), []);
 
   const filtered = useMemo(() => {
     const needle = q.toLowerCase().trim();
-    return appointments.filter((appointment) => {
+    return records.filter((appointment) => {
       const haystack = [appointment.appointmentId, appointment.patientName, appointment.normalizedPhone, appointment.date, appointment.locationNameEn].join(" ").toLowerCase();
       return (!needle || haystack.includes(needle)) && (!status || appointment.status === status) && (!requiresOnly || appointment.requiresReschedule);
     });
-  }, [appointments, q, requiresOnly, status]);
+  }, [records, q, requiresOnly, status]);
 
   const markStatus = async (appointment, nextStatus) => {
-    if (nextStatus === "No-Show" && !window.confirm(`Mark ${appointment.appointmentId} as No-Show? Only confirm if the patient missed the scheduled appointment.`)) return;
+    let reason = "";
+    if (nextStatus === "No-Show") {
+      setNoShowCandidate(appointment);
+      setNoShowReason("");
+      return;
+    }
     setActionLoading(appointment.appointmentId);
     try {
-      await api(`/appointments/${appointment.appointmentId}/status`, { method: "POST", body: { status: nextStatus } });
-      await refresh();
+      await api(`/appointments/${appointment.appointmentId}/status`, { method: "POST", body: { status: nextStatus, ...(reason ? { reason: reason.trim() } : {}) } });
+      await Promise.allSettled([refresh({ skipAppointments: true }), loadPage(pagination.page)]);
       flash(`Appointment marked ${nextStatus}.`);
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const confirmNoShow = async (event) => {
+    event.preventDefault();
+    if (!noShowCandidate || noShowReason.trim().length < 3) return;
+    const appointment = noShowCandidate;
+    setActionLoading(appointment.appointmentId);
+    try {
+      await api(`/appointments/${appointment.appointmentId}/status`, {
+        method: "POST",
+        body: { status: "No-Show", reason: noShowReason.trim() }
+      });
+      setNoShowCandidate(null);
+      setNoShowReason("");
+      await Promise.allSettled([refresh({ skipAppointments: true }), loadPage(pagination.page)]);
+      flash("Appointment marked No-Show.");
     } finally {
       setActionLoading("");
     }
@@ -523,7 +657,7 @@ function AppointmentsView({ appointments, loading, api, refresh, flash }) {
         method: "POST",
         body: { appointmentId: appointment.appointmentId, phone: appointment.normalizedPhone, reason }
       });
-      await refresh();
+      await Promise.allSettled([refresh({ skipAppointments: true }), loadPage(pagination.page)]);
       flash("Appointment cancelled.");
     } finally {
       setActionLoading("");
@@ -554,11 +688,12 @@ function AppointmentsView({ appointments, loading, api, refresh, flash }) {
             <p>{filtered.length} record(s)</p>
           </div>
         </div>
+        {pageError && <div className="form-error" role="alert">{pageError} <button type="button" className="ghost-button" onClick={() => loadPage(pagination?.page || 1).catch(() => {})}>Retry</button></div>}
         <AppointmentTable
           appointments={filtered}
-          loading={loading}
+          loading={loading || pageLoading}
           actions={(appointment) => (
-            <>
+            ["Booked", "Rescheduled"].includes(appointment.status) ? <>
               <button title="Reschedule" disabled={actionLoading === appointment.appointmentId} onClick={() => setReschedule(appointment)}>
                 <RefreshCw size={15} />
               </button>
@@ -571,11 +706,32 @@ function AppointmentsView({ appointments, loading, api, refresh, flash }) {
               <button title="Cancel" disabled={actionLoading === appointment.appointmentId} onClick={() => cancel(appointment)}>
                 <Ban size={15} />
               </button>
-            </>
+            </> : null
           )}
         />
+        <div className="toolbar-panel">
+          <button type="button" className="ghost-button" disabled={!pagination?.hasPrevious || pageLoading} onClick={() => loadPage(pagination.page - 1).catch(() => {})}>Previous</button>
+          <span>Page {pagination?.page || 1} of {pagination?.totalPages || 1} · {pagination?.total || 0} record(s)</span>
+          <button type="button" className="ghost-button" disabled={!pagination?.hasNext || pageLoading} onClick={() => loadPage(pagination.page + 1).catch(() => {})}>Next</button>
+        </div>
       </section>
       {reschedule && <RescheduleModal appointment={reschedule} api={api} refresh={refresh} flash={flash} onClose={() => setReschedule(null)} />}
+      {noShowCandidate && <Modal title="Confirm No-Show" onClose={() => actionLoading ? null : setNoShowCandidate(null)}>
+        <form className="form-grid" onSubmit={confirmNoShow}>
+          <p className="full">This is a terminal status and cannot be reversed.</p>
+          <Field label="Patient"><input value={noShowCandidate.patientName} readOnly /></Field>
+          <Field label="Current status"><input value={noShowCandidate.status} readOnly /></Field>
+          <Field label="Appointment date"><input value={displayDate(noShowCandidate.date)} readOnly /></Field>
+          <Field label="Appointment time"><input value={displayTime(noShowCandidate.time)} readOnly /></Field>
+          <Field label="Verification note">
+            <textarea value={noShowReason} onChange={(event) => setNoShowReason(event.target.value)} minLength={3} maxLength={250} required autoFocus />
+          </Field>
+          <div className="full row-actions">
+            <button type="button" className="ghost-button" disabled={Boolean(actionLoading)} onClick={() => setNoShowCandidate(null)}>Cancel</button>
+            <button type="submit" className="danger-button" disabled={Boolean(actionLoading) || noShowReason.trim().length < 3}>{actionLoading ? "Savingâ€¦" : "Confirm No-Show"}</button>
+          </div>
+        </form>
+      </Modal>}
     </div>
   );
 }
@@ -635,7 +791,8 @@ function AddAppointmentView({ settings, api, refresh, flash }) {
     locationId: "",
     date: todayIso(),
     time: "",
-    source: "Reception"
+    source: "Reception",
+    consentAccepted: false
   });
   const [slots, setSlots] = useState([]);
   const [error, setError] = useState("");
@@ -664,8 +821,8 @@ function AddAppointmentView({ settings, api, refresh, flash }) {
     setError("");
     setSubmitting(true);
     try {
-      await api("/appointments", { method: "POST", body: { ...form, age: Number(form.age), consentAccepted: true } });
-      setForm({ ...form, fullName: "", phone: "", age: "", city: "", reasonForVisit: "" });
+      await api("/appointments", { method: "POST", body: { ...form, age: Number(form.age) } });
+      setForm({ ...form, fullName: "", phone: "", age: "", city: "", reasonForVisit: "", consentAccepted: false });
       await refresh();
       flash("Appointment booked. WhatsApp status is shown in message logs.");
     } catch (err) {
@@ -734,6 +891,7 @@ function AppointmentForm({ form, setForm, locations, slots, onSubmit, error, sub
       <Field label="Reason for Visit">
         <textarea value={form.reasonForVisit} onChange={(event) => setForm({ ...form, reasonForVisit: event.target.value })} rows={4} required />
       </Field>
+      <label className="check-row full"><input type="checkbox" checked={Boolean(form.consentAccepted)} onChange={(event) => setForm({ ...form, consentAccepted: event.target.checked })} required />Patient consent was obtained, or reception has documented the patient's verbal consent.</label>
       {error && <p className="form-error full">{error}</p>}
       <button className="primary-button full" disabled={submitting || !form.time}>
         <Save size={17} />
@@ -960,26 +1118,43 @@ function DoctorProfileView({ settings, api, refresh, flash }) {
 
 function SpecialSchedulesView({ settings, specialSchedules, api, refresh, flash }) {
   const locations = settings?.locations || [];
-  const emptyForm = () => ({
-    locationId: locations[0]?.locationId || "",
-    date: todayIso(),
-    working: true,
-    openingTime: "09:00",
-    closingTime: "17:00",
-    slotDurationMinutes: 15,
-    dailyLimit: 28,
-    breaks: [],
+  const schedules = settings?.schedules || [];
+  const scheduleDefaults = (locationId, date) => {
+    const schedule = schedules.find((item) => item.locationId === locationId);
+    const day = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][new Date(`${date}T12:00:00`).getDay()];
+    const rule = schedule?.dayRules?.find((item) => item.day === day);
+    return {
+      working: rule?.working ?? Boolean(schedule?.workingDays?.includes(day)),
+      openingTime: rule?.openingTime || schedule?.openingTime || "09:00",
+      closingTime: rule?.closingTime || schedule?.closingTime || "14:00",
+      slotDurationMinutes: rule?.slotDurationMinutes || schedule?.slotDurationMinutes || 10,
+      dailyLimit: rule?.dailyLimit || schedule?.dailyLimit || 30,
+      breaks: rule?.breaks || []
+    };
+  };
+  const emptyForm = () => {
+    const locationId = locations[0]?.locationId || "";
+    const date = todayIso();
+    return ({
+    locationId,
+    date,
+    ...scheduleDefaults(locationId, date),
     labelEn: "Special clinic hours",
     labelUr: "خصوصی کلینک اوقات",
     active: true
   });
+  };
   const [form, setForm] = useState(emptyForm);
+  const [formDirty, setFormDirty] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!form.locationId && locations[0]) setForm((current) => ({ ...current, locationId: locations[0].locationId }));
-  }, [form.locationId, locations]);
+    if (!formDirty && locations[0]) {
+      const locationId = form.locationId || locations[0].locationId;
+      setForm((current) => ({ ...current, locationId, ...scheduleDefaults(locationId, current.date) }));
+    }
+  }, [settings, form.locationId, formDirty]);
 
   const addBreak = () => setForm({ ...form, breaks: [...form.breaks, { breakId: `break-${Date.now()}`, startTime: "13:00", endTime: "14:00", labelEn: "Break", labelUr: "وقفہ" }] });
   const changeBreak = (index, field, value) => setForm({ ...form, breaks: form.breaks.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: value } : item) });
@@ -992,6 +1167,7 @@ function SpecialSchedulesView({ settings, specialSchedules, api, refresh, flash 
       const preview = await api("/slots/special/impact", { method: "POST", body: form });
       if (!confirmScheduleImpact(preview.impact, "Saving this special schedule")) return;
       const result = await api("/slots/special", { method: "PUT", body: form });
+      setFormDirty(false);
       await refresh();
       flash(impactFlash(result.impact, "Special schedule saved."));
     } catch (err) {
@@ -1002,19 +1178,20 @@ function SpecialSchedulesView({ settings, specialSchedules, api, refresh, flash 
   };
 
   const remove = async (item) => {
-    if (!window.confirm(`Remove the special schedule for ${item.date}?`)) return;
-    await api(`/slots/special/${item.specialScheduleId}`, { method: "DELETE" });
+    const preview = await api(`/slots/special/${item.specialScheduleId}/removal-impact`, { method: "POST" });
+    if (!confirmScheduleImpact(preview.impact, `Removing the special schedule for ${item.date}`)) return;
+    const result = await api(`/slots/special/${item.specialScheduleId}`, { method: "DELETE" });
     await refresh();
-    flash("Special schedule removed.");
+    flash(impactFlash(result.impact, "Special schedule removed."));
   };
 
   return (
     <div className="page-grid">
       <section className="panel">
         <div className="panel-heading"><div><h2>Special Date Override</h2><p>Open a normally closed day or replace normal hours for one date.</p></div></div>
-        <form className="form-grid single" onSubmit={submit}>
-          <Field label="Clinic"><select value={form.locationId} onChange={(event) => setForm({ ...form, locationId: event.target.value })}>{locations.map((item) => <option key={item.locationId} value={item.locationId}>{item.nameEn}</option>)}</select></Field>
-          <Field label="Date"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} required /></Field>
+        <form className="form-grid single" onSubmit={submit} onChange={() => setFormDirty(true)}>
+          <Field label="Clinic"><select value={form.locationId} onChange={(event) => setForm({ ...form, locationId: event.target.value, ...scheduleDefaults(event.target.value, form.date) })}>{locations.map((item) => <option key={item.locationId} value={item.locationId}>{item.nameEn}</option>)}</select></Field>
+          <Field label="Date"><input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value, ...scheduleDefaults(form.locationId, event.target.value) })} required /></Field>
           <label className="check-row"><input type="checkbox" checked={form.working} onChange={(event) => setForm({ ...form, working: event.target.checked })} />Clinic open on this date</label>
           {form.working && <><Field label="Opening"><input type="time" value={form.openingTime} onChange={(event) => setForm({ ...form, openingTime: event.target.value })} /></Field><Field label="Closing"><input type="time" value={form.closingTime} onChange={(event) => setForm({ ...form, closingTime: event.target.value })} /></Field><Field label="Slot minutes"><input type="number" min="5" max="120" value={form.slotDurationMinutes} onChange={(event) => setForm({ ...form, slotDurationMinutes: Number(event.target.value) })} /></Field><Field label="Daily limit"><input type="number" min="1" max="200" value={form.dailyLimit} onChange={(event) => setForm({ ...form, dailyLimit: Number(event.target.value) })} /></Field></>}
           {form.breaks.map((item, index) => <div className="break-editor" key={item.breakId}><input type="time" value={item.startTime} onChange={(event) => changeBreak(index, "startTime", event.target.value)} /><input type="time" value={item.endTime} onChange={(event) => changeBreak(index, "endTime", event.target.value)} /><button type="button" className="ghost-button" onClick={() => setForm({ ...form, breaks: form.breaks.filter((_, itemIndex) => itemIndex !== index) })}>Remove</button></div>)}
@@ -1043,7 +1220,7 @@ function LocationsView({ settings, api, refresh, flash, canEdit }) {
 
 function LocationCard({ location, schedule, api, refresh, flash, canEdit }) {
   const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-  const [locationForm, setLocationForm] = useState(() => ({
+  const makeLocationForm = () => ({
     nameEn: location.nameEn || "",
     nameUr: location.nameUr || "",
     addressEn: location.addressEn || "",
@@ -1056,15 +1233,15 @@ function LocationCard({ location, schedule, api, refresh, flash, canEdit }) {
     consultationFee: location.consultationFee ?? null,
     timezone: location.timezone || "Asia/Karachi",
     active: location.active ?? true
-  }));
-  const [form, setForm] = useState(() => ({
+  });
+  const makeScheduleForm = () => ({
     workingDays: schedule?.workingDays || ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
     openingTime: schedule?.openingTime || "09:00",
-    closingTime: schedule?.closingTime || "17:00",
-    breakStart: schedule?.breakStart || "13:00",
-    breakEnd: schedule?.breakEnd || "14:00",
-    slotDurationMinutes: schedule?.slotDurationMinutes || 15,
-    dailyLimit: schedule?.dailyLimit || 28,
+    closingTime: schedule?.closingTime || "14:00",
+    breakStart: schedule?.breakStart || "",
+    breakEnd: schedule?.breakEnd || "",
+    slotDurationMinutes: schedule?.slotDurationMinutes || 10,
+    dailyLimit: schedule?.dailyLimit || 30,
     timezone: schedule?.timezone || "Asia/Karachi",
     dayRules: days.map((day) => {
       const existing = schedule?.dayRules?.find((item) => item.day === day);
@@ -1072,18 +1249,30 @@ function LocationCard({ location, schedule, api, refresh, flash, canEdit }) {
         day,
         working: Boolean(schedule?.workingDays?.includes(day)),
         openingTime: schedule?.openingTime || "09:00",
-        closingTime: schedule?.closingTime || "17:00",
-        slotDurationMinutes: schedule?.slotDurationMinutes || 15,
-        dailyLimit: schedule?.dailyLimit || 28,
+        closingTime: schedule?.closingTime || "14:00",
+        slotDurationMinutes: schedule?.slotDurationMinutes || 10,
+        dailyLimit: schedule?.dailyLimit || 30,
         breaks: schedule?.breakStart && schedule?.breakEnd
           ? [{ breakId: `${day.toLowerCase()}-break`, startTime: schedule.breakStart, endTime: schedule.breakEnd, labelEn: schedule.breakReasonEn || "Break", labelUr: schedule.breakReasonUr || "وقفہ" }]
           : []
       };
     }),
     active: schedule?.active ?? true
-  }));
+  });
+  const [locationForm, setLocationForm] = useState(makeLocationForm);
+  const [form, setForm] = useState(makeScheduleForm);
+  const [locationDirty, setLocationDirty] = useState(false);
+  const [scheduleDirty, setScheduleDirty] = useState(false);
   const [submitting, setSubmitting] = useState("");
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!locationDirty) setLocationForm(makeLocationForm());
+  }, [location, locationDirty]);
+
+  useEffect(() => {
+    if (!scheduleDirty) setForm(makeScheduleForm());
+  }, [schedule, scheduleDirty]);
 
   const changeDay = (day, field, value) => setForm((current) => ({
     ...current,
@@ -1108,6 +1297,7 @@ function LocationCard({ location, schedule, api, refresh, flash, canEdit }) {
       const preview = await api(`/settings/locations/${location.locationId}/impact`, { method: "POST", body: locationForm });
       if (!confirmScheduleImpact(preview.impact, "Changing clinic availability")) return;
       const result = await api(`/settings/locations/${location.locationId}`, { method: "PUT", body: locationForm });
+      setLocationDirty(false);
       await refresh();
       flash(impactFlash(result.impact, "Clinic information updated."));
     } catch (err) {
@@ -1127,6 +1317,7 @@ function LocationCard({ location, schedule, api, refresh, flash, canEdit }) {
       const preview = await api(`/settings/schedules/${location.locationId}/impact`, { method: "POST", body });
       if (!confirmScheduleImpact(preview.impact, "Saving this weekly schedule")) return;
       const result = await api(`/settings/schedules/${location.locationId}`, { method: "PUT", body });
+      setScheduleDirty(false);
       await refresh();
       flash(impactFlash(result.impact, "Weekly schedule updated."));
     } catch (err) {
@@ -1144,7 +1335,7 @@ function LocationCard({ location, schedule, api, refresh, flash, canEdit }) {
           <p>{location.addressEn}</p>
         </div>
       </div>
-      <form className="form-grid" onSubmit={submitLocation}>
+      <form className="form-grid" onSubmit={submitLocation} onChange={() => setLocationDirty(true)}>
         <Field label="Clinic Name (English)"><input value={locationForm.nameEn} onChange={(event) => setLocationForm({ ...locationForm, nameEn: event.target.value })} disabled={!canEdit} /></Field>
         <Field label="Clinic Name (Urdu)"><input dir="rtl" value={locationForm.nameUr} onChange={(event) => setLocationForm({ ...locationForm, nameUr: event.target.value })} disabled={!canEdit} /></Field>
         <Field label="Address (English)"><textarea value={locationForm.addressEn} onChange={(event) => setLocationForm({ ...locationForm, addressEn: event.target.value })} disabled={!canEdit} /></Field>
@@ -1157,7 +1348,7 @@ function LocationCard({ location, schedule, api, refresh, flash, canEdit }) {
         {canEdit && <button className="primary-button" disabled={Boolean(submitting)}>{submitting === "location" ? "Saving…" : "Save Clinic Information"}</button>}
       </form>
       <hr className="panel-divider" />
-      <form className="weekly-schedule" onSubmit={submit}>
+      <form className="weekly-schedule" onSubmit={submit} onChange={() => setScheduleDirty(true)}>
         <h3>Weekly Schedule</h3>
         {form.dayRules.map((rule) => (
           <div className={`weekday-editor ${rule.working ? "working" : "closed"}`} key={rule.day}>

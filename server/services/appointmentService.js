@@ -3,14 +3,14 @@ import { ACTIVE_APPOINTMENT_STATUSES, APPOINTMENT_POLICIES, DOCTOR } from "../co
 import { models } from "../models/index.js";
 import { getDoctorProfile, getLocation } from "./clinicConfigService.js";
 import { minutesUntilLocalAppointment, validateSlotAvailability } from "./slotService.js";
-import { addAuditLog } from "./auditService.js";
+import { addAuditLogSafely } from "./auditService.js";
 import { appointmentCreateSchema, appointmentLookupSchema, appointmentRescheduleSchema, appointmentCancelSchema } from "../utils/validation.js";
 import { escapeRegex, makeAppointmentId, makePublicId, maskPhone, normalizePhone } from "../utils/time.js";
 
 function duplicateKeyMessage(error) {
   if (error?.code !== 11000) return null;
   const keys = Object.keys(error.keyPattern || {});
-  if (keys.includes("normalizedPhone")) return "This phone number already has an active appointment on this date.";
+  if (keys.includes("patientId")) return "This patient already has an active appointment on this date.";
   if (keys.includes("time")) return "This slot is already booked.";
   return "A conflicting appointment already exists.";
 }
@@ -66,8 +66,9 @@ export async function listAppointments(filters = {}) {
   if (filters.status) query.status = filters.status;
   if (filters.date) query.date = filters.date;
   if (filters.locationId) query.locationId = filters.locationId;
-  if (filters.q) {
-    const q = escapeRegex(filters.q);
+  const search = String(filters.q || "").trim().slice(0, 64);
+  if (search) {
+    const q = escapeRegex(search);
     query.$or = [
       { appointmentId: { $regex: q, $options: "i" } },
       { patientName: { $regex: q, $options: "i" } },
@@ -100,6 +101,56 @@ export async function listAppointments(filters = {}) {
   }));
 }
 
+export async function listAppointmentsPage(filters = {}) {
+  const query = {};
+  if (filters.status) query.status = filters.status;
+  if (filters.date) query.date = filters.date;
+  if (filters.locationId) query.locationId = filters.locationId;
+  if (String(filters.requiresReschedule || "").toLowerCase() === "true") query.requiresReschedule = true;
+  const search = String(filters.q || "").trim().slice(0, 64);
+  if (search) {
+    const q = escapeRegex(search);
+    query.$or = [
+      { appointmentId: { $regex: q, $options: "i" } },
+      { patientName: { $regex: q, $options: "i" } },
+      { normalizedPhone: { $regex: q, $options: "i" } },
+      { date: { $regex: q, $options: "i" } }
+    ];
+  }
+  const page = Math.max(1, Number.parseInt(filters.page, 10) || 1);
+  const limit = Math.max(1, Math.min(Number.parseInt(filters.limit, 10) || 50, 200));
+  const [items, total] = await Promise.all([
+    models.Appointment.find(query).sort({ date: -1, time: -1, _id: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+    models.Appointment.countDocuments(query)
+  ]);
+  const appointments = items.map((item) => ({
+    appointmentId: item.appointmentId,
+    patientName: item.patientName,
+    normalizedPhone: item.normalizedPhone,
+    maskedPhone: maskPhone(item.normalizedPhone || item.phone),
+    age: item.age,
+    gender: item.gender,
+    city: item.city,
+    locationId: item.locationId,
+    locationNameEn: item.locationNameEn,
+    locationNameUr: item.locationNameUr,
+    doctorName: item.doctorName,
+    date: item.date,
+    time: item.time,
+    tokenNumber: item.tokenNumber,
+    status: item.status,
+    source: item.source,
+    requiresReschedule: Boolean(item.requiresReschedule),
+    rescheduleReason: item.rescheduleReason || "",
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt
+  }));
+  return {
+    appointments,
+    pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)), hasNext: page * limit < total, hasPrevious: page > 1 }
+  };
+}
+
 export async function getAppointmentById(appointmentId) {
   return models.Appointment.findOne({ appointmentId }).lean();
 }
@@ -116,6 +167,21 @@ export async function lookupAppointmentSafe(payload) {
 export async function createAppointment(input, actor = null, req = null) {
   const parsed = appointmentCreateSchema.parse(input);
   const normalizedPhone = normalizePhone(parsed.phone);
+  const patientId = parsed.patientId || makePublicId("PAT");
+  const identityKey = patientId;
+  if (parsed.patientId) {
+    const knownPatient = await models.Patient.findOne({ patientId: parsed.patientId }).lean();
+    if (!knownPatient) {
+      const error = new Error("The selected patient record was not found. Start a new patient registration instead.");
+      error.status = 404;
+      throw error;
+    }
+    if (normalizePhone(knownPatient.normalizedPhone || knownPatient.phone) !== normalizedPhone) {
+      const error = new Error("The selected patient record does not belong to this contact number.");
+      error.status = 409;
+      throw error;
+    }
+  }
   const location = await getLocation(parsed.locationId);
   if (!location) {
     const error = new Error("Clinic location was not found.");
@@ -128,7 +194,7 @@ export async function createAppointment(input, actor = null, req = null) {
     locationId: parsed.locationId,
     date: parsed.date,
     time: parsed.time,
-    phone: normalizedPhone
+    patientId
   });
   const tokenNumber = selectedSlot.tokenNumber;
   if (!tokenNumber) {
@@ -141,43 +207,42 @@ export async function createAppointment(input, actor = null, req = null) {
   try {
     let appointment;
     await session.withTransaction(async () => {
-      const existingPatient = await models.Patient.findOne({ normalizedPhone }).session(session);
-      let patient = existingPatient;
-      if (patient) {
-        patient = await models.Patient.findOneAndUpdate(
-          { normalizedPhone },
+      const patientDetails = {
+        fullName: parsed.fullName,
+        phone: parsed.phone,
+        normalizedPhone,
+        age: parsed.age,
+        gender: parsed.gender,
+        city: parsed.city,
+        reasonForVisit: parsed.reasonForVisit,
+        consentAccepted: true,
+        consentAcceptedAt: new Date(),
+        consentSource: parsed.source || "WhatsApp",
+        consentRecordedBy: actor?.userId || ""
+      };
+      const patient = parsed.patientId
+        ? await models.Patient.findOneAndUpdate(
+          { patientId, normalizedPhone },
           {
-            fullName: parsed.fullName,
-            phone: parsed.phone,
-            age: parsed.age,
-            gender: parsed.gender,
-            city: parsed.city,
-            reasonForVisit: parsed.reasonForVisit,
-            consentAccepted: true,
-            consentAcceptedAt: patient.consentAcceptedAt || new Date()
+            $set: patientDetails
           },
           { returnDocument: "after", session }
-        );
-      } else {
-        patient = await models.Patient.create(
-          [
-            {
-              patientId: makePublicId("PAT"),
-              fullName: parsed.fullName,
-              phone: parsed.phone,
-              normalizedPhone,
-              age: parsed.age,
-              gender: parsed.gender,
-              city: parsed.city,
-              reasonForVisit: parsed.reasonForVisit,
-              consentAccepted: true,
-              consentAcceptedAt: new Date()
-            }
-          ],
-          { session }
-        ).then((items) => items[0]);
+        )
+        : await models.Patient.create([{
+          patientId,
+          identityKey,
+          ...patientDetails
+        }], { session }).then((items) => items[0]);
+      /*
+       * Do not infer that two registrations are the same person merely because
+       * a family shares a contact number, name, or gender. Only an opaque,
+       * previously issued patientId authorizes reuse of an existing record.
+       */
+      if (!patient) {
+        const error = new Error("The selected patient record could not be updated.");
+        error.status = 409;
+        throw error;
       }
-
       const consentedAt = new Date();
       await models.WhatsAppConsent.findOneAndUpdate(
         { normalizedPhone },
@@ -227,7 +292,7 @@ export async function createAppointment(input, actor = null, req = null) {
       ).then((items) => items[0]);
     });
 
-    await addAuditLog({
+    await addAuditLogSafely({
       actor,
       action: "Appointment created",
       module: "Appointments",
@@ -242,7 +307,7 @@ export async function createAppointment(input, actor = null, req = null) {
     const message = duplicateKeyMessage(error);
     if (message) {
       const existing = await models.Appointment.findOne({
-        normalizedPhone,
+        patientId,
         locationId: parsed.locationId,
         date: parsed.date,
         time: parsed.time,
@@ -289,7 +354,7 @@ export async function rescheduleAppointment(input, actor = null, req = null) {
     locationId: parsed.locationId,
     date: parsed.date,
     time: parsed.time,
-    phone: normalizedPhone,
+    patientId: appointment.patientId,
     excludeAppointmentId: appointment.appointmentId
   });
   const tokenNumber = selectedSlot.tokenNumber;
@@ -338,7 +403,7 @@ export async function rescheduleAppointment(input, actor = null, req = null) {
       );
     });
 
-    await addAuditLog({
+    await addAuditLogSafely({
       actor,
       action: "Appointment rescheduled",
       module: "Appointments",
@@ -406,7 +471,7 @@ export async function cancelAppointment(input, actor = null, req = null) {
     throw error;
   }
 
-  await addAuditLog({
+  await addAuditLogSafely({
     actor,
     action: "Appointment cancelled",
     module: "Appointments",
@@ -419,7 +484,20 @@ export async function cancelAppointment(input, actor = null, req = null) {
   return appointment;
 }
 
-export async function updateAppointmentStatus(appointmentId, status, actor = null, req = null) {
+export const APPOINTMENT_STATUS_TRANSITIONS = {
+  Booked: ["Visited", "No-Show", "Cancelled"],
+  Rescheduled: ["Visited", "No-Show", "Cancelled"],
+  Visited: [],
+  "No-Show": [],
+  Cancelled: []
+};
+
+export async function updateAppointmentStatus(appointmentId, status, actor = null, req = null, reason = "") {
+  if (status === "No-Show" && String(reason || "").trim().length < 3) {
+    const error = new Error("A brief verification note is required when marking an appointment No-Show.");
+    error.status = 422;
+    throw error;
+  }
   const existing = await models.Appointment.findOne({ appointmentId }).lean();
   if (!existing) {
     const error = new Error("Appointment was not found.");
@@ -427,8 +505,21 @@ export async function updateAppointmentStatus(appointmentId, status, actor = nul
     throw error;
   }
 
-  if (status === "No-Show" && minutesUntilLocalAppointment(existing.date, existing.time) > 0) {
-    const error = new Error("A future appointment cannot be marked No-Show. Wait until its scheduled time has passed.");
+  if (status === existing.status) return existing;
+  if (!(APPOINTMENT_STATUS_TRANSITIONS[existing.status] || []).includes(status)) {
+    const error = new Error(`An appointment marked ${existing.status} cannot be changed to ${status}.`);
+    error.status = 409;
+    throw error;
+  }
+
+  const minutesUntil = minutesUntilLocalAppointment(existing.date, existing.time);
+  if (status === "Visited" && minutesUntil > 0) {
+    const error = new Error("A future appointment cannot be marked Visited.");
+    error.status = 409;
+    throw error;
+  }
+  if (status === "No-Show" && minutesUntil > -APPOINTMENT_POLICIES.noShowAfterMinutes) {
+    const error = new Error(`An appointment cannot be marked No-Show until ${APPOINTMENT_POLICIES.noShowAfterMinutes} minutes after its scheduled time.`);
     error.status = 409;
     throw error;
   }
@@ -439,24 +530,44 @@ export async function updateAppointmentStatus(appointmentId, status, actor = nul
     updates.rescheduleReason = "";
   }
   if (status === "Cancelled") {
+    updates.cancelledReason = String(reason || "Cancelled by staff").slice(0, 250);
     updates.cancelledAt = new Date();
     updates.cancelledBy = actor?.userId || actor?.id || "Staff";
     updates.cancelledSource = cancellationSource(actor);
+  } else if (status === "Visited") {
+    updates.visitedAt = new Date();
+    updates.visitedBy = actor?.userId || actor?.id || "Staff";
+  } else if (status === "No-Show") {
+    updates.noShowAt = new Date();
+    updates.noShowBy = actor?.userId || actor?.id || "Staff";
+    updates.noShowReason = String(reason || "").trim().slice(0, 250);
   }
 
-  const appointment = await models.Appointment.findOneAndUpdate({ appointmentId }, updates, { returnDocument: "after" }).lean();
+  const appointment = await models.Appointment.findOneAndUpdate(
+    { appointmentId, status: existing.status },
+    updates,
+    { returnDocument: "after" }
+  ).lean();
   if (!appointment) {
-    const error = new Error("Appointment was not found.");
-    error.status = 404;
+    const current = await models.Appointment.findOne({ appointmentId }).lean();
+    const error = new Error(current
+      ? `This appointment changed to ${current.status} while you were updating it. Refresh and review the latest status.`
+      : "Appointment was not found.");
+    error.status = current ? 409 : 404;
     throw error;
   }
 
-  await addAuditLog({
+  await addAuditLogSafely({
     actor,
     action: `Appointment marked ${status}`,
     module: "Appointments",
     targetType: "Appointment",
     targetId: appointment.appointmentId,
+    metadata: {
+      previousStatus: existing.status,
+      newStatus: status,
+      ...(reason ? { reason: String(reason).trim().slice(0, 250) } : {})
+    },
     req
   });
 

@@ -9,7 +9,7 @@ import { generateScheduleSlots, isWithinAdvanceWindow } from "../server/services
 import { messageBodyForLog, sanitizeMessageLog } from "../server/services/whatsappService.js";
 import { getMetricsSnapshot, recordMetric, resetMetrics } from "../server/services/monitoringService.js";
 import { toMinutes } from "../server/utils/time.js";
-import { blockedSlotSchema, dateSchema, isValidPatientName, scheduleSchema, timeSchema } from "../server/utils/validation.js";
+import { adminStatusSchema, blockedSlotSchema, dateSchema, isValidPatientName, scheduleSchema, timeSchema } from "../server/utils/validation.js";
 
 function completeProductionEnvironment(overrides = {}) {
   return {
@@ -53,11 +53,18 @@ test("schedule validation rejects reversed, unpaired, misaligned, and excessive 
   const { timezone: _timezone, ...validSchedule } = VERIFIED_GENERAL_SCHEDULE;
   assert.equal(scheduleSchema.safeParse(validSchedule).success, true);
   assert.equal(scheduleSchema.safeParse({ ...validSchedule, closingTime: "08:00" }).success, false);
-  assert.equal(scheduleSchema.safeParse({ ...validSchedule, breakEnd: "" }).success, false);
+  assert.equal(scheduleSchema.safeParse({ ...validSchedule, breakStart: "13:00", breakEnd: "" }).success, false);
   assert.equal(scheduleSchema.safeParse({ ...validSchedule, breakStart: "13:05" }).success, false);
-  assert.equal(scheduleSchema.safeParse({ ...validSchedule, dailyLimit: 29 }).success, false);
+  assert.equal(scheduleSchema.safeParse({ ...validSchedule, dailyLimit: 31 }).success, false);
   assert.equal(scheduleSchema.safeParse({ ...validSchedule, workingDays: ["Monday", "Monday"] }).success, false);
   assert.deepEqual(generateScheduleSlots({ ...VERIFIED_GENERAL_SCHEDULE, openingTime: "bad" }, "2026-06-29"), []);
+});
+
+test("No-Show status validation requires a meaningful verification note", () => {
+  assert.equal(adminStatusSchema.safeParse({ status: "No-Show" }).success, false);
+  assert.equal(adminStatusSchema.safeParse({ status: "No-Show", reason: "  " }).success, false);
+  assert.equal(adminStatusSchema.safeParse({ status: "No-Show", reason: "Patient did not arrive" }).success, true);
+  assert.equal(adminStatusSchema.safeParse({ status: "Visited" }).success, true);
 });
 
 test("partial-day blocks require ordered start and end times", () => {
@@ -81,6 +88,10 @@ test("production environment validation accepts a complete configuration and rej
   assert.equal(validateEnvironment(completeProductionEnvironment({ CORS_ALLOWED_ORIGINS: "https:\/\/clinic.example.com\/" })).ok, true);
   assert.match(validateEnvironment(completeProductionEnvironment({ CORS_ALLOWED_ORIGINS: "https:\/\/clinic.example.com\/path" })).errors.join(" "), /CORS_ALLOWED_ORIGINS/);
   assert.match(validateEnvironment(completeProductionEnvironment({ MONGODB_MIN_POOL_SIZE: "20", MONGODB_MAX_POOL_SIZE: "10" })).errors.join(" "), /must not exceed/);
+  assert.equal(validateEnvironment(completeProductionEnvironment({ TRUST_PROXY: "loopback, 10.0.0.0/8" })).ok, true);
+  assert.match(validateEnvironment(completeProductionEnvironment({ TRUST_PROXY: "true" })).errors.join(" "), /TRUST_PROXY/);
+  assert.match(validateEnvironment(completeProductionEnvironment({ JWT_REFRESH_EXPIRES_IN: "forever" })).errors.join(" "), /JWT_REFRESH_EXPIRES_IN/);
+  assert.match(validateEnvironment(completeProductionEnvironment({ RUN_PATIENT_IDENTITY_MIGRATION: "maybe" })).errors.join(" "), /RUN_PATIENT_IDENTITY_MIGRATION/);
 });
 
 test("production can launch web booking before Meta setup while strict WhatsApp mode fails closed", () => {
@@ -105,7 +116,7 @@ test("production can launch web booking before Meta setup while strict WhatsApp 
   assert.match(validateEnvironment({ ...webOnlyEnvironment, WHATSAPP_REQUIRED: "later" }).errors.join(" "), /must be true or false/);
 });
 
-test("Hostinger production runtime supplies secure and domain-safe defaults", () => {
+test("Hostinger production runtime supplies domain defaults but never generates production secrets", () => {
   const environment = {
     NODE_ENV: "production",
     MONGODB_URI: "mongodb://localhost:27017/clinic"
@@ -118,11 +129,13 @@ test("Hostinger production runtime supplies secure and domain-safe defaults", ()
   assert.equal(environment.CORS_ALLOWED_ORIGINS, PRODUCTION_ORIGIN);
   assert.equal(environment.DEFAULT_TIMEZONE, "Asia/Karachi");
   assert.equal(environment.WHATSAPP_REQUIRED, "false");
-  assert.equal(environment.JWT_ACCESS_SECRET.length, 64);
-  assert.equal(environment.JWT_REFRESH_SECRET.length, 64);
-  assert.equal(environment.COOKIE_SECRET.length, 64);
-  assert.equal(environment.ADMIN_BOOTSTRAP_TOKEN.length, 64);
-  assert.equal(validateEnvironment(environment).ok, true);
+  assert.equal(environment.JWT_ACCESS_SECRET, undefined);
+  assert.equal(environment.JWT_REFRESH_SECRET, undefined);
+  assert.equal(environment.COOKIE_SECRET, undefined);
+  assert.equal(environment.ADMIN_BOOTSTRAP_TOKEN, undefined);
+  const validation = validateEnvironment(environment);
+  assert.equal(validation.ok, false);
+  assert.match(validation.errors.join(" "), /JWT_ACCESS_SECRET/);
 });
 
 test("WhatsApp interactive replies are extracted and operational logs redact patient content", () => {

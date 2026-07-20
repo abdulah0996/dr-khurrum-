@@ -25,7 +25,8 @@ export const UserSchema = new mongoose.Schema(
     failedLoginAttempts: { type: Number, default: 0 },
     lastFailedLoginAt: Date,
     lockUntil: Date,
-    lastLoginAt: Date
+    lastLoginAt: Date,
+    tokenVersion: { type: Number, default: 0 }
   },
   schemaOptions
 );
@@ -66,9 +67,9 @@ const DayRuleSchema = new mongoose.Schema(
     day: { type: String, required: true },
     working: { type: Boolean, default: false },
     openingTime: { type: String, default: "09:00" },
-    closingTime: { type: String, default: "17:00" },
-    slotDurationMinutes: { type: Number, min: 5, max: 120, default: 15 },
-    dailyLimit: { type: Number, min: 1, max: 200, default: 32 },
+    closingTime: { type: String, default: "14:00" },
+    slotDurationMinutes: { type: Number, min: 5, max: 120, default: 10 },
+    dailyLimit: { type: Number, min: 1, max: 200, default: 30 },
     breaks: { type: [ScheduleBreakSchema], default: [] }
   },
   { _id: false }
@@ -85,8 +86,8 @@ export const ScheduleRuleSchema = new mongoose.Schema(
     breakEnd: { type: String, default: "" },
     breakReasonEn: { type: String, default: "" },
     breakReasonUr: { type: String, default: "" },
-    slotDurationMinutes: { type: Number, default: 15 },
-    dailyLimit: { type: Number, default: 32 },
+    slotDurationMinutes: { type: Number, default: 10 },
+    dailyLimit: { type: Number, default: 30 },
     timezone: { type: String, default: "Asia/Karachi" },
     dayRules: { type: [DayRuleSchema], default: [] },
     active: { type: Boolean, default: true, index: true }
@@ -124,8 +125,8 @@ export const SpecialScheduleSchema = new mongoose.Schema(
     date: { type: String, required: true, index: true },
     working: { type: Boolean, default: false },
     openingTime: { type: String, default: "09:00" },
-    closingTime: { type: String, default: "17:00" },
-    slotDurationMinutes: { type: Number, min: 5, max: 120, default: 15 },
+    closingTime: { type: String, default: "14:00" },
+    slotDurationMinutes: { type: Number, min: 5, max: 120, default: 10 },
     dailyLimit: { type: Number, min: 1, max: 200, default: 32 },
     breaks: { type: [ScheduleBreakSchema], default: [] },
     labelEn: { type: String, trim: true, default: "Special schedule" },
@@ -175,6 +176,7 @@ export const DoctorProfileSchema = new mongoose.Schema(
 export const PatientSchema = new mongoose.Schema(
   {
     patientId: publicId,
+    identityKey: { type: String, trim: true },
     fullName: { type: String, required: true, trim: true, index: true },
     phone: { type: String, required: true, trim: true },
     normalizedPhone: { type: String, required: true, trim: true },
@@ -183,12 +185,18 @@ export const PatientSchema = new mongoose.Schema(
     city: { type: String, trim: true },
     reasonForVisit: { type: String, trim: true, maxlength: 500 },
     consentAccepted: { type: Boolean, default: false },
-    consentAcceptedAt: Date
+    consentAcceptedAt: Date,
+    consentSource: { type: String, enum: ["WhatsApp", "WhatsApp Cloud API", "Reception", "Patient Web Chat"] },
+    consentRecordedBy: { type: String, trim: true, default: "" }
   },
   schemaOptions
 );
 
-PatientSchema.index({ normalizedPhone: 1 }, { unique: true });
+PatientSchema.index({ normalizedPhone: 1 });
+PatientSchema.index(
+  { identityKey: 1 },
+  { unique: true, partialFilterExpression: { identityKey: { $type: "string", $gt: "" } } }
+);
 
 export const AppointmentSchema = new mongoose.Schema(
   {
@@ -219,6 +227,11 @@ export const AppointmentSchema = new mongoose.Schema(
     cancelledAt: Date,
     cancelledBy: String,
     cancelledSource: { type: String, enum: ["Patient", "Admin", "System"] },
+    visitedAt: Date,
+    visitedBy: String,
+    noShowAt: Date,
+    noShowBy: String,
+    noShowReason: { type: String, trim: true, maxlength: 250 },
     rescheduleHistory: [
       {
         fromLocationId: String,
@@ -246,8 +259,11 @@ AppointmentSchema.index(
     partialFilterExpression: { status: { $in: ["Booked", "Rescheduled"] } }
   }
 );
+AppointmentSchema.index({ date: -1, time: -1, _id: -1 });
+AppointmentSchema.index({ status: 1, date: -1, time: -1 });
+AppointmentSchema.index({ locationId: 1, date: -1, time: -1 });
 AppointmentSchema.index(
-  { normalizedPhone: 1, date: 1 },
+  { patientId: 1, date: 1 },
   {
     unique: true,
     partialFilterExpression: { status: { $in: ["Booked", "Rescheduled"] } }
@@ -268,6 +284,7 @@ export const MessageLogSchema = new mongoose.Schema(
     phone: { type: String, trim: true, index: true },
     normalizedPhone: { type: String, trim: true, index: true },
     appointmentId: { type: String, trim: true, index: true },
+    idempotencyKey: { type: String, trim: true },
     messageType: { type: String, trim: true, index: true },
     messageBody: { type: String, trim: true },
     direction: { type: String, enum: ["Incoming", "Outgoing", "Status"], index: true },
@@ -286,6 +303,13 @@ MessageLogSchema.index(
   {
     unique: true,
     partialFilterExpression: { providerMessageId: { $type: "string", $gt: "" } }
+  }
+);
+MessageLogSchema.index(
+  { idempotencyKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { idempotencyKey: { $type: "string", $gt: "" } }
   }
 );
 
@@ -333,12 +357,46 @@ export const WebhookEventSchema = new mongoose.Schema(
     provider: { type: String, required: true, index: true },
     providerEventId: { type: String, required: true, index: true },
     eventType: { type: String, trim: true },
-    processedAt: { type: Date, default: Date.now }
+    status: { type: String, enum: ["received", "processing", "completed", "failed", "retrying", "dead_letter"], default: "received", index: true },
+    attempts: { type: Number, default: 0 },
+    lockedAt: Date,
+    completedAt: Date,
+    nextRetryAt: Date,
+    lastError: { type: String, trim: true, default: "" },
+    processedAt: Date
   },
-  { timestamps: false, versionKey: false }
+  schemaOptions
 );
 
 WebhookEventSchema.index({ provider: 1, providerEventId: 1 }, { unique: true });
+WebhookEventSchema.index({ status: 1, lockedAt: 1 });
+
+export const ConversationLockSchema = new mongoose.Schema(
+  {
+    normalizedPhone: { type: String, required: true, unique: true, index: true },
+    owner: { type: String, required: true },
+    lockedUntil: { type: Date, required: true, index: true }
+  },
+  schemaOptions
+);
+
+export const AuthSessionSchema = new mongoose.Schema(
+  {
+    authSessionId: publicId,
+    userId: { type: String, required: true, index: true },
+    familyId: { type: String, required: true, index: true },
+    tokenHash: { type: String, required: true, unique: true, index: true },
+    tokenVersion: { type: Number, required: true, default: 0 },
+    expiresAt: { type: Date, required: true },
+    lastUsedAt: Date,
+    revokedAt: Date,
+    revokeReason: { type: String, trim: true, default: "" },
+    replacedByHash: { type: String, trim: true, default: "" }
+  },
+  schemaOptions
+);
+
+AuthSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export const ChatSessionSchema = new mongoose.Schema(
   {
@@ -388,6 +446,8 @@ export const models = {
   AuditLog: mongoose.models.AuditLog || mongoose.model("AuditLog", AuditLogSchema),
   WhatsAppConsent: mongoose.models.WhatsAppConsent || mongoose.model("WhatsAppConsent", WhatsAppConsentSchema),
   WebhookEvent: mongoose.models.WebhookEvent || mongoose.model("WebhookEvent", WebhookEventSchema),
+  ConversationLock: mongoose.models.ConversationLock || mongoose.model("ConversationLock", ConversationLockSchema),
+  AuthSession: mongoose.models.AuthSession || mongoose.model("AuthSession", AuthSessionSchema),
   ChatSession: mongoose.models.ChatSession || mongoose.model("ChatSession", ChatSessionSchema),
   Counter: mongoose.models.Counter || mongoose.model("Counter", CounterSchema)
 };

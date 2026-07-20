@@ -15,7 +15,7 @@
 
 Hostinger must use the repository root, Node.js 20 or newer, `npm run build` as the build command, `npm start` as the start command, and root `index.js` as the entry file. Record the stable commit before deployment. Roll back by redeploying that commit without changing or deleting MongoDB records.
 
-The verified production origin is `https://admin.nighatmedicalcomplex.com`. When URL, CORS, timezone, or authentication-secret variables are absent, the runtime supplies secure launch defaults for this origin. Explicit long authentication secrets remain recommended because generated secrets invalidate staff sessions whenever the Node process restarts. The HTTP listener opens even when deployment configuration is incomplete and before Atlas initialization, so a missing variable or slow database connection cannot cause Hostinger's platform-level 503 page; health remains degraded and database-backed API routes remain safely unavailable until configuration and Atlas are ready.
+The verified production origin is `https://admin.nighatmedicalcomplex.com`. Production startup fails closed when required URLs, CORS configuration, database settings, or stable authentication secrets are missing. Development and test modes may generate process-local secrets, but production never does. Database-backed API routes remain unavailable until Atlas initialization succeeds; `/api/health/live` remains available for process liveness and `/api/health/ready` reports readiness.
 
 For a web-only Hostinger launch before Meta approval, set `WHATSAPP_REQUIRED=false`. The application will serve patient booking and administration normally while WhatsApp delivery remains disabled. Set it to `true` only after all required Meta credentials have been added.
 
@@ -37,7 +37,7 @@ TRUST_PROXY=1
 WHATSAPP_REQUIRED=false
 ```
 
-Do not set a fixed `PORT` when the hosting platform supplies one. The application reads Hostinger's runtime `PORT` automatically. After changing variables, redeploy and verify `/api/health` reports both `status: "ok"` and `mongoConnected: true`.
+Do not set a fixed `PORT` when the hosting platform supplies one. The application reads Hostinger's runtime `PORT` automatically. After changing variables, deploy the recorded release commit and verify `/api/health` reports `environment: "production"`, `status: "ok"`, and `mongoConnected: true`; also verify `/api/health/live` and `/api/health/ready`. Do not deploy until a production backup and separate-database restore test have been recorded.
 
 MongoDB Atlas only accepts connections from addresses in the project's Network Access list. Add the Hostinger application server's outbound IP (or the narrowest CIDR supplied by Hostinger) before redeploying. Do not leave `0.0.0.0/0` enabled for production. Hostinger's Node.js Database Connect Wizard can also be used to connect an Atlas project and apply its variables during the next deployment.
 
@@ -57,3 +57,5 @@ Operational checks:
 - Rotate Node, PM2, proxy, and platform logs.
 - Monitor WhatsApp failed-message logs and Meta WhatsApp Manager quality status during launch week.
 - Pause non-essential sends if local failure-rate warnings appear.
+
+Rollback: keep the pre-release commit and database backup identifiers in the release record. If smoke checks fail, redeploy the pre-release commit without running migrations or deleting database records. A database restore is a separate, explicitly approved operation and must never be performed merely to roll back application code.

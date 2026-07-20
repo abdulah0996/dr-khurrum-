@@ -56,9 +56,12 @@ test("mobile, RTL, focus, safe-area, and reduced-motion rules are present", () =
 });
 
 test("the real-browser patient UI script is available as an explicit guarded check", () => {
-  assert.equal(packageJson.scripts["test:patient-ui"], "node scripts/patient-ui-check.js");
+  assert.equal(packageJson.scripts["test:patient-ui"], "npm run build && node scripts/patient-ui-check.js");
+  assert.equal(packageJson.scripts["test:browser"], "npm run test:patient-ui");
   const script = fs.readFileSync(new URL("../scripts/patient-ui-check.js", import.meta.url), "utf8");
-  assert.match(script, /TEST_MONGODB_URI must target a database ending in _test/);
+  assert.match(script, /acquireDisposableTestMongo/);
+  const databaseHarness = fs.readFileSync(new URL("../scripts/lib/test-mongodb.js", import.meta.url), "utf8");
+  assert.match(databaseHarness, /must end with _test/);
   assert.match(script, /mobileViewports: \[412, 375, 320\]/);
   assert.match(script, /fullEnglishBooking: true/);
   assert.match(script, /urduRtl: true/);

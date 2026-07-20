@@ -96,6 +96,16 @@ export function normalizePhone(phone) {
   return raw.replace(/[^\d+]/g, "");
 }
 
+export function patientIdentityKey({ phone, fullName, gender }) {
+  const normalizedName = compactText(fullName, 100)
+    .normalize("NFKC")
+    .toLocaleLowerCase("en")
+    .replace(/[^\p{L}\p{M}]+/gu, " ")
+    .trim();
+  const input = `${normalizePhone(phone)}|${normalizedName}|${String(gender || "").toLowerCase()}`;
+  return crypto.createHash("sha256").update(input).digest("hex");
+}
+
 export function maskPhone(phone) {
   const normalized = normalizePhone(phone);
   if (normalized.length <= 6) return "****";

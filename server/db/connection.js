@@ -1,6 +1,9 @@
 import mongoose from "mongoose";
 
 let connectionPromise = null;
+let recoveryTimer = null;
+let recoveryStopped = false;
+let initializationComplete = false;
 let lastConnectionError = "";
 let connectionMode = process.env.MONGODB_URI ? "mongo" : "disabled";
 
@@ -14,7 +17,16 @@ export function sanitizeDatabaseError(error) {
 }
 
 export function isDatabaseReady() {
+  return mongoose.connection.readyState === 1 && initializationComplete;
+}
+
+function isDatabaseConnected() {
   return mongoose.connection.readyState === 1;
+}
+
+export function markDatabaseInitialized() {
+  if (!isDatabaseConnected()) throw new Error("MongoDB cannot be marked initialized while disconnected.");
+  initializationComplete = true;
 }
 
 export function databaseHealth() {
@@ -43,11 +55,12 @@ export async function connectDatabase() {
     return { connected: false, mode: "disabled" };
   }
 
-  if (isDatabaseReady()) return { connected: true, mode: "mongo" };
+  if (isDatabaseConnected()) return { connected: true, mode: "mongo" };
 
   if (!connectionPromise) {
     mongoose.set("strictQuery", true);
-    connectionPromise = (async () => {
+    mongoose.set("autoIndex", process.env.NODE_ENV !== "production");
+    const pending = (async () => {
       const attempts = Math.max(1, Math.min(Number(process.env.MONGODB_CONNECT_RETRIES || 3), 10));
       let lastError;
       for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -73,19 +86,71 @@ export async function connectDatabase() {
           }
         }
       }
-      connectionPromise = null;
       throw lastError;
     })();
+    connectionPromise = pending;
+    pending.finally(() => {
+      if (connectionPromise === pending) connectionPromise = null;
+    }).catch(() => {});
   }
 
   return connectionPromise;
 }
 
+export function startDatabaseRecovery({
+  onConnected = async () => {},
+  minimumDelayMs = 1000,
+  maximumDelayMs = 30000,
+  connect = connectDatabase,
+  isReady = isDatabaseReady,
+  markInitialized = markDatabaseInitialized
+} = {}) {
+  recoveryStopped = false;
+  let delayMs = minimumDelayMs;
+  const schedule = (delay) => {
+    if (recoveryStopped) return;
+    clearTimeout(recoveryTimer);
+    recoveryTimer = setTimeout(run, delay);
+    recoveryTimer.unref?.();
+  };
+  const run = async () => {
+    if (recoveryStopped) return;
+    if (isReady()) {
+      delayMs = minimumDelayMs;
+      schedule(maximumDelayMs);
+      return;
+    }
+    try {
+      const result = await connect();
+      if (result.connected) {
+        await onConnected();
+        markInitialized();
+        delayMs = minimumDelayMs;
+        schedule(maximumDelayMs);
+        return;
+      }
+    } catch (error) {
+      console.warn(`MongoDB recovery attempt failed: ${sanitizeDatabaseError(error)}`);
+    }
+    schedule(delayMs);
+    delayMs = Math.min(delayMs * 2, maximumDelayMs);
+  };
+  schedule(minimumDelayMs);
+}
+
+export function stopDatabaseRecovery() {
+  recoveryStopped = true;
+  clearTimeout(recoveryTimer);
+  recoveryTimer = null;
+}
+
 export async function disconnectDatabase() {
+  stopDatabaseRecovery();
   if (mongoose.connection.readyState !== 0) {
     await mongoose.disconnect();
   }
   connectionPromise = null;
+  initializationComplete = false;
   connectionMode = "mongo";
 }
 
@@ -94,6 +159,7 @@ mongoose.connection.on("error", (error) => {
 });
 
 mongoose.connection.on("disconnected", () => {
+  initializationComplete = false;
   console.warn("MongoDB disconnected!");
 });
 

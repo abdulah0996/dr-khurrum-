@@ -20,6 +20,15 @@ const OPERATIONAL_MESSAGE_TYPES = new Set([
   "opt_out_confirmation"
 ]);
 
+async function addWhatsAppAuditSafely(entry) {
+  try {
+    return await addAuditLog(entry);
+  } catch (error) {
+    console.error("WhatsApp audit log write failed", { action: entry.action, error: compactText(error?.message, 200) });
+    return null;
+  }
+}
+
 const OPT_OUT_MESSAGES = new Set([
   "stop",
   "unsubscribe",
@@ -440,7 +449,7 @@ export async function sendWhatsAppText({
       appointmentId,
       messageType,
       messageBody: text,
-      direction: "Outgoing",
+      direction: "Status",
       status: "not_configured",
       error: "WhatsApp is not configured yet"
     });
@@ -515,12 +524,12 @@ export async function sendWhatsAppText({
 
     if (!result.ok) {
       await recordDeliveryFailure(to);
-      await addAuditLog({ actor, action: "WhatsApp message failed", module: "WhatsApp", targetType: "Message", targetId: result.providerMessageId, metadata: { error: result.error } });
+      await addWhatsAppAuditSafely({ actor, action: "WhatsApp message failed", module: "WhatsApp", targetType: "Message", targetId: result.providerMessageId, metadata: { error: result.error } });
       return { sent: false, status, providerMessageId: result.providerMessageId, error: result.error, retryCount: result.retryCount };
     }
 
     await recordDeliverySuccess(to);
-    await addAuditLog({ actor, action: "WhatsApp message sent", module: "WhatsApp", targetType: "Message", targetId: result.providerMessageId });
+    await addWhatsAppAuditSafely({ actor, action: "WhatsApp message sent", module: "WhatsApp", targetType: "Message", targetId: result.providerMessageId });
     return {
       sent: true,
       status,
@@ -542,13 +551,55 @@ export async function sendWhatsAppText({
       error: error.message
     });
     await recordDeliveryFailure(to);
-    await addAuditLog({ actor, action: "WhatsApp message failed", module: "WhatsApp", metadata: { error: error.message } });
+    await addWhatsAppAuditSafely({ actor, action: "WhatsApp message failed", module: "WhatsApp", metadata: { error: error.message } });
     return { sent: false, status: "failed", error: error.message };
   }
 }
 
 export async function sendAppointmentWhatsApp({ appointment, text, messageType, actor = null, language = "en" }) {
-  return sendWhatsAppText({
+  const repeatable = messageType === "appointment_reminder";
+  const idempotencyKey = repeatable
+    ? ""
+    : `wa:${crypto
+        .createHash("sha256")
+        .update([messageType, appointment.appointmentId, appointment.status, appointment.date, appointment.time].join("|"))
+        .digest("hex")}`;
+  let reservation = null;
+  if (idempotencyKey) {
+    const reservationData = {
+      messageLogId: makePublicId("MSG"),
+      phone: appointment.normalizedPhone || appointment.phone,
+      normalizedPhone: normalizePhone(appointment.normalizedPhone || appointment.phone),
+      appointmentId: appointment.appointmentId,
+      idempotencyKey,
+      messageType,
+      messageBody: "",
+      direction: "Outgoing",
+      status: "sending",
+      rawPayload: null
+    };
+    try {
+      reservation = await models.MessageLog.create(reservationData);
+    } catch (error) {
+      if (error?.code !== 11000) throw error;
+      const existing = await models.MessageLog.findOne({ idempotencyKey }).lean();
+      if (existing && ["sent", "delivered", "read"].includes(existing.status)) {
+        return { sent: true, status: existing.status, providerMessageId: existing.providerMessageId || "", deduplicated: true };
+      }
+      const staleBefore = new Date(Date.now() - 2 * 60 * 1000);
+      reservation = await models.MessageLog.findOneAndUpdate(
+        {
+          idempotencyKey,
+          $or: [{ status: { $nin: ["sending", "sent", "delivered", "read"] } }, { status: "sending", updatedAt: { $lte: staleBefore } }]
+        },
+        { $set: { status: "sending", error: "", retryCount: 0, rawPayload: null } },
+        { returnDocument: "after" }
+      ).lean();
+      if (!reservation) return { sent: false, status: "in_progress", deduplicated: true };
+    }
+  }
+
+  const result = await sendWhatsAppText({
     to: appointment.normalizedPhone || appointment.phone,
     text,
     messageType,
@@ -559,6 +610,20 @@ export async function sendAppointmentWhatsApp({ appointment, text, messageType, 
     templateName: templateNameForMessageType(messageType),
     templateComponents: appointmentTemplateComponents(appointment, messageType, language)
   });
+  if (reservation) {
+    await models.MessageLog.updateOne(
+      { idempotencyKey, status: "sending" },
+      {
+        $set: {
+          status: result.status,
+          error: compactText(result.error || result.message || "", 500),
+          retryCount: Number(result.retryCount || 0),
+          rawPayload: null
+        }
+      }
+    ).catch((error) => console.error("WhatsApp idempotency reservation update failed", { error: compactText(error?.message, 200) }));
+  }
+  return result;
 }
 
 export function verifyMetaSignature(req) {
@@ -572,20 +637,144 @@ export function verifyMetaSignature(req) {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
+const WEBHOOK_MAX_ATTEMPTS = 5;
+const WEBHOOK_STALE_MS = 2 * 60 * 1000;
+
+function dueRetryQuery(now) {
+  const staleBefore = new Date(now.getTime() - WEBHOOK_STALE_MS);
+  return {
+    $or: [
+      {
+        status: { $in: ["received", "failed", "retrying"] },
+        $or: [{ nextRetryAt: null }, { nextRetryAt: { $exists: false } }, { nextRetryAt: { $lte: now } }]
+      },
+      {
+        status: "processing",
+        $or: [{ lockedAt: null }, { lockedAt: { $exists: false } }, { lockedAt: { $lte: staleBefore } }]
+      }
+    ]
+  };
+}
+
+export async function claimWebhookEventForRetry(providerEventId, { now = new Date() } = {}) {
+  if (!providerEventId) return null;
+  return models.WebhookEvent.findOneAndUpdate(
+    {
+      provider: "WhatsApp",
+      providerEventId,
+      attempts: { $lt: WEBHOOK_MAX_ATTEMPTS },
+      ...dueRetryQuery(now)
+    },
+    {
+      $set: { status: "retrying", lockedAt: now, nextRetryAt: null, lastError: "" },
+      $inc: { attempts: 1 }
+    },
+    { returnDocument: "after" }
+  ).lean();
+}
+
 export async function recordWebhookEvent(providerEventId, eventType) {
-  if (!providerEventId) return { inserted: false, duplicate: false };
+  if (!providerEventId) return { inserted: false, duplicate: false, accepted: false };
+  const now = new Date();
   try {
-    await models.WebhookEvent.create({
+    const event = await models.WebhookEvent.create({
       eventId: makePublicId("EVT"),
       provider: "WhatsApp",
       providerEventId,
-      eventType
+      eventType,
+      status: "processing",
+      attempts: 1,
+      lockedAt: now,
+      processedAt: null
     });
-    return { inserted: true, duplicate: false };
+    return { inserted: true, duplicate: false, accepted: true, event };
   } catch (error) {
-    if (error.code === 11000) return { inserted: false, duplicate: true };
-    throw error;
+    if (error.code !== 11000) throw error;
+    if (models.WebhookEvent.db.readyState !== 1) return { inserted: false, duplicate: true, accepted: false };
+    const existing = await models.WebhookEvent.findOne({ provider: "WhatsApp", providerEventId }).lean();
+    if (!existing || existing.status === "completed" || existing.status === "dead_letter") {
+      return { inserted: false, duplicate: true, accepted: false, event: existing };
+    }
+    if (Number(existing.attempts || 0) >= WEBHOOK_MAX_ATTEMPTS) {
+      const event = await models.WebhookEvent.findOneAndUpdate(
+        { _id: existing._id, ...dueRetryQuery(now) },
+        { $set: { status: "dead_letter", lockedAt: null, nextRetryAt: null } },
+        { returnDocument: "after" }
+      ).lean();
+      return {
+        inserted: false,
+        duplicate: true,
+        accepted: false,
+        inProgress: !event && existing.status === "processing",
+        deferred: !event && ["failed", "retrying"].includes(existing.status),
+        event: event || existing
+      };
+    }
+    const event = await claimWebhookEventForRetry(providerEventId, { now });
+    return event
+      ? { inserted: false, duplicate: false, accepted: true, retry: true, event }
+      : {
+          inserted: false,
+          duplicate: true,
+          accepted: false,
+          inProgress: existing.status === "processing",
+          deferred: ["failed", "retrying"].includes(existing.status) && existing.nextRetryAt > now,
+          event: existing
+        };
   }
+}
+
+export async function completeWebhookEvent(providerEventId) {
+  return models.WebhookEvent.findOneAndUpdate(
+    { provider: "WhatsApp", providerEventId, status: { $in: ["processing", "retrying"] } },
+    { $set: { status: "completed", completedAt: new Date(), processedAt: new Date(), lockedAt: null, lastError: "" } },
+    { returnDocument: "after" }
+  ).lean();
+}
+
+export async function failWebhookEvent(providerEventId, error) {
+  const existing = await models.WebhookEvent.findOne({ provider: "WhatsApp", providerEventId }).lean();
+  if (!existing) return null;
+  const deadLetter = Number(existing.attempts || 0) >= WEBHOOK_MAX_ATTEMPTS;
+  return models.WebhookEvent.findOneAndUpdate(
+    { _id: existing._id, status: { $in: ["processing", "retrying"] } },
+    {
+      $set: {
+        status: deadLetter ? "dead_letter" : "failed",
+        lockedAt: null,
+        nextRetryAt: deadLetter ? null : new Date(Date.now() + Math.min(60000, 1000 * 2 ** Number(existing.attempts || 1))),
+        lastError: compactText(error?.message || "Webhook processing failed", 300)
+      }
+    },
+    { returnDocument: "after" }
+  ).lean();
+}
+
+export async function processDueWebhookEvents({ handler, limit = 20, now = new Date() } = {}) {
+  if (typeof handler !== "function") throw new TypeError("A webhook retry handler is required.");
+  const boundedLimit = Math.max(1, Math.min(Number(limit) || 20, 100));
+  const candidates = await models.WebhookEvent.find({
+    provider: "WhatsApp",
+    attempts: { $lt: WEBHOOK_MAX_ATTEMPTS },
+    ...dueRetryQuery(now)
+  })
+    .sort({ nextRetryAt: 1, createdAt: 1 })
+    .limit(boundedLimit)
+    .lean();
+  const results = [];
+  for (const candidate of candidates) {
+    const claimed = await claimWebhookEventForRetry(candidate.providerEventId, { now });
+    if (!claimed) continue;
+    try {
+      await handler(claimed);
+      await completeWebhookEvent(claimed.providerEventId);
+      results.push({ providerEventId: claimed.providerEventId, status: "completed" });
+    } catch (error) {
+      const failed = await failWebhookEvent(claimed.providerEventId, error);
+      results.push({ providerEventId: claimed.providerEventId, status: failed?.status || "failed" });
+    }
+  }
+  return results;
 }
 
 export async function listMessageLogs(limit = 300) {
@@ -595,13 +784,20 @@ export async function listMessageLogs(limit = 300) {
 
 export async function updateMessageStatus(providerMessageId, status) {
   if (!providerMessageId) return null;
+  const allowedPreviousStatuses = {
+    sent: [],
+    delivered: ["sent"],
+    read: ["sent", "delivered"],
+    failed: ["sent"]
+  };
+  if (!Object.hasOwn(allowedPreviousStatuses, status) || allowedPreviousStatuses[status].length === 0) return null;
   const log = await models.MessageLog.findOneAndUpdate(
-    { providerMessageId },
-    { status, rawPayload: null },
+    { providerMessageId, status: { $in: allowedPreviousStatuses[status] } },
+    { $set: { status, rawPayload: null } },
     { returnDocument: "after" }
   ).lean();
   if (log?.normalizedPhone && status === "failed") await recordDeliveryFailure(log.normalizedPhone);
-  if (log?.normalizedPhone && ["sent", "delivered", "read"].includes(status)) await recordDeliverySuccess(log.normalizedPhone);
+  if (log?.normalizedPhone && ["delivered", "read"].includes(status)) await recordDeliverySuccess(log.normalizedPhone);
   return log;
 }
 

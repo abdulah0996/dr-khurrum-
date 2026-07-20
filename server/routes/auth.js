@@ -1,11 +1,14 @@
 import bcrypt from "bcryptjs";
 import { Router } from "express";
+import mongoose from "mongoose";
 import { models } from "../models/index.js";
-import { publicUser, signAccessToken, authenticate } from "../middleware/auth.js";
+import { authenticate } from "../middleware/auth.js";
 import { bootstrapLimiter, loginLimiters, resetAccountFailureLimit } from "../middleware/loginRateLimit.js";
 import { addAuditLog } from "../services/auditService.js";
 import { bootstrapSchema, loginSchema } from "../utils/validation.js";
 import { makePublicId } from "../utils/time.js";
+import { acquireInvariantLock } from "../services/adminInvariantService.js";
+import { issueAuthSession, revokeAuthSession, rotateAuthSession } from "../services/authSessionService.js";
 
 const router = Router();
 const LOCK_AFTER = 10;
@@ -14,7 +17,7 @@ const LOCK_WINDOW_MS = LOCK_MINUTES * 60 * 1000;
 
 router.get("/bootstrap/status", async (_req, res, next) => {
   try {
-    const adminCount = await models.User.countDocuments({ role: "Super Admin" });
+    const adminCount = await models.User.countDocuments({ role: "Super Admin", status: "Active" });
     res.json({ setupRequired: adminCount === 0 });
   } catch (error) {
     next(error);
@@ -22,31 +25,39 @@ router.get("/bootstrap/status", async (_req, res, next) => {
 });
 
 router.post("/bootstrap", bootstrapLimiter, async (req, res, next) => {
+  const session = await mongoose.startSession();
   try {
     const parsed = bootstrapSchema.parse(req.body);
     if (parsed.token !== process.env.ADMIN_BOOTSTRAP_TOKEN) {
       return res.status(403).json({ message: "Invalid bootstrap token." });
     }
 
-    const adminCount = await models.User.countDocuments({ role: "Super Admin" });
-    if (adminCount > 0) {
-      return res.status(409).json({ message: "Bootstrap is disabled after the first Super Admin is created." });
-    }
-
-    const user = await models.User.create({
-      userId: makePublicId("USR"),
-      name: parsed.name,
-      email: parsed.email,
-      passwordHash: await bcrypt.hash(parsed.password, 12),
-      role: "Super Admin",
-      status: "Active"
+    const passwordHash = await bcrypt.hash(parsed.password, 12);
+    let user;
+    await session.withTransaction(async () => {
+      await acquireInvariantLock("initial-super-admin-bootstrap", session);
+      const adminCount = await models.User.countDocuments({ role: "Super Admin", status: "Active" }).session(session);
+      if (adminCount > 0) {
+        const error = new Error("Bootstrap is disabled after the first Super Admin is created.");
+        error.status = 409;
+        throw error;
+      }
+      [user] = await models.User.create([{
+        userId: makePublicId("USR"),
+        name: parsed.name,
+        email: parsed.email,
+        passwordHash,
+        role: "Super Admin",
+        status: "Active"
+      }], { session });
     });
 
     await addAuditLog({ actor: user, action: "Staff user created", module: "Users", targetType: "User", targetId: user.userId, req });
-    const token = signAccessToken(user);
-    res.status(201).json({ token, user: publicUser(user) });
+    res.status(201).json(await issueAuthSession(user, res));
   } catch (error) {
     next(error);
+  } finally {
+    await session.endSession();
   }
 });
 
@@ -142,8 +153,7 @@ router.post("/login", ...loginLimiters, async (req, res, next) => {
     resetAccountFailureLimit(req, res);
     await addAuditLog({ actor: user, action: "Admin login success", module: "Auth", targetType: "User", targetId: user.userId, req });
 
-    const token = signAccessToken(user);
-    res.json({ token, user: publicUser(user) });
+    res.json(await issueAuthSession(user, res));
   } catch (error) {
     next(error);
   }
@@ -153,8 +163,23 @@ router.get("/me", authenticate, (req, res) => {
   res.json({ user: req.user });
 });
 
-router.post("/logout", authenticate, (_req, res) => {
-  res.json({ ok: true });
+router.post("/refresh", async (req, res, next) => {
+  try {
+    const session = await rotateAuthSession(req, res);
+    if (!session) return res.status(401).json({ message: "Refresh session is invalid or expired." });
+    return res.json(session);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/logout", async (req, res, next) => {
+  try {
+    await revokeAuthSession(req, res);
+    return res.json({ ok: true });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 export default router;

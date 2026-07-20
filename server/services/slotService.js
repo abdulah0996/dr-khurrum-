@@ -3,18 +3,24 @@ import { models } from "../models/index.js";
 import { getLocation, getScheduleForLocation } from "./clinicConfigService.js";
 import { addDaysIso, currentTimeHHMM, dayName, fromMinutes, isPastDate, toMinutes, todayIso } from "../utils/time.js";
 
-function isWithinBlockedRange(time, block) {
+function intervalsOverlap(start, end, unavailableStart, unavailableEnd) {
+  return start !== null && end !== null && unavailableStart !== null && unavailableEnd !== null && start < unavailableEnd && end > unavailableStart;
+}
+
+function isWithinBlockedRange(time, block, durationMinutes) {
   if (!block.active) return false;
   if (block.fullDay) return true;
   if (!block.startTime || !block.endTime) return false;
   const slot = toMinutes(time);
+  const slotEnd = slot === null ? null : slot + durationMinutes;
   const start = toMinutes(block.startTime);
   const end = toMinutes(block.endTime);
-  return slot !== null && start !== null && end !== null && slot >= start && slot < end;
+  return intervalsOverlap(slot, slotEnd, start, end);
 }
 
-function isDuringBreak(time, schedule) {
+function isDuringBreak(time, schedule, durationMinutes) {
   const slot = toMinutes(time);
+  const slotEnd = slot === null ? null : slot + durationMinutes;
   const breaks = schedule.breaks?.length
     ? schedule.breaks
     : schedule.breakStart && schedule.breakEnd
@@ -23,7 +29,7 @@ function isDuringBreak(time, schedule) {
   return breaks.some((item) => {
     const start = toMinutes(item.startTime);
     const end = toMinutes(item.endTime);
-    return slot !== null && start !== null && end !== null && slot >= start && slot < end;
+    return intervalsOverlap(slot, slotEnd, start, end);
   });
 }
 
@@ -90,7 +96,7 @@ export function generateScheduleSlots(schedule, date = todayIso()) {
 
   for (let cursor = opening; cursor + duration <= closing && slots.length < limit; cursor += duration) {
     const time = fromMinutes(cursor);
-    if (!isDuringBreak(time, schedule)) slots.push(time);
+    if (!isDuringBreak(time, schedule, duration)) slots.push(time);
   }
 
   return slots;
@@ -160,7 +166,7 @@ export async function getAvailability({ locationId, date, includeUnavailable = t
   const now = currentTimeHHMM(schedule?.timezone || TIMEZONE);
 
   const slots = baseSlots.map((time) => {
-    const blocked = blocks.find((block) => isWithinBlockedRange(time, block));
+    const blocked = blocks.find((block) => isWithinBlockedRange(time, block, Number(effectiveSchedule.slotDurationMinutes || 15)));
     const bookedAppointment = bookedByTime.get(time);
     const cutoff = Date.parse(`${date}T00:00:00.000Z`) < Date.parse(`${today}T00:00:00.000Z`) || (date === today && isInsideSameDayCutoff(time, now));
     const available = !blocked && !bookedAppointment && !cutoff && !atDailyCapacity;
@@ -191,7 +197,7 @@ export async function getAvailability({ locationId, date, includeUnavailable = t
   };
 }
 
-export async function validateSlotAvailability({ locationId, date, time, phone = "", excludeAppointmentId = "" }) {
+export async function validateSlotAvailability({ locationId, date, time, patientId = "", identityKey = "", excludeAppointmentId = "" }) {
   if (isPastDate(date) || !isWithinAdvanceWindow(date)) {
     const error = new Error(`Appointments may be booked from today through ${APPOINTMENT_POLICIES.advanceBookingDays} days in advance.`);
     error.status = 422;
@@ -218,16 +224,21 @@ export async function validateSlotAvailability({ locationId, date, time, phone =
     throw error;
   }
 
-  if (phone) {
+  let resolvedPatientId = patientId;
+  if (!resolvedPatientId && identityKey) {
+    const patientQuery = models.Patient.findOne({ identityKey });
+    resolvedPatientId = (typeof patientQuery?.lean === "function" ? (await patientQuery.lean())?.patientId : "") || "";
+  }
+  if (resolvedPatientId) {
     const duplicate = await models.Appointment.findOne({
       appointmentId: { $ne: excludeAppointmentId },
-      normalizedPhone: phone,
+      patientId: resolvedPatientId,
       date,
       status: { $in: ["Booked", "Rescheduled"] }
     }).lean();
 
     if (duplicate) {
-      const error = new Error("This phone number already has an active appointment on this date.");
+      const error = new Error("This patient already has an active appointment on this date.");
       error.status = 409;
       throw error;
     }
@@ -298,5 +309,5 @@ export async function upsertSpecialSchedule(payload, actor) {
 }
 
 export async function removeSpecialSchedule(specialScheduleId) {
-  return models.SpecialSchedule.findOneAndUpdate({ specialScheduleId }, { active: false }, { returnDocument: "after" }).lean();
+  return models.SpecialSchedule.findOneAndUpdate({ specialScheduleId, active: true }, { active: false }, { returnDocument: "after" }).lean();
 }

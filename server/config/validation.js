@@ -1,3 +1,5 @@
+import { parseTrustProxy } from "./trustProxy.js";
+
 const REQUIRED_ALWAYS = [
   "MONGODB_URI",
   "JWT_ACCESS_SECRET",
@@ -45,7 +47,6 @@ function isHttpUrl(value = "", requireHttps = false) {
 
 const NUMERIC_RULES = {
   PORT: [1, 65535],
-  TRUST_PROXY: [0, 10],
   MONGODB_CONNECT_RETRIES: [1, 10],
   MONGODB_MAX_POOL_SIZE: [1, 200],
   MONGODB_MIN_POOL_SIZE: [0, 200],
@@ -59,7 +60,12 @@ const NUMERIC_RULES = {
   KEEP_ALIVE_TIMEOUT_MS: [100, 300000],
   WHATSAPP_RETRY_ATTEMPTS: [0, 5],
   WHATSAPP_HTTP_TIMEOUT_MS: [1000, 120000],
-  SLOW_REQUEST_MS: [100, 300000]
+  SLOW_REQUEST_MS: [100, 300000],
+  NO_SHOW_GRACE_MINUTES: [0, 240],
+  RETENTION_WEBHOOK_EVENT_DAYS: [0, 36500],
+  RETENTION_MESSAGE_LOG_DAYS: [0, 36500],
+  RETENTION_CHAT_SESSION_DAYS: [0, 36500],
+  RETENTION_AUDIT_LOG_DAYS: [0, 36500]
 };
 
 export function whatsappConfigured(env = process.env) {
@@ -75,6 +81,9 @@ export function validateEnvironment(env = process.env) {
   if (env.WHATSAPP_REQUIRED && !/^(?:true|false)$/i.test(String(env.WHATSAPP_REQUIRED).trim())) {
     errors.push("WHATSAPP_REQUIRED must be true or false.");
   }
+  if (env.RUN_PATIENT_IDENTITY_MIGRATION && !/^(?:true|false)$/i.test(String(env.RUN_PATIENT_IDENTITY_MIGRATION).trim())) {
+    errors.push("RUN_PATIENT_IDENTITY_MIGRATION must be true or false.");
+  }
 
   Object.entries(NUMERIC_RULES).forEach(([key, [minimum, maximum]]) => {
     if (env[key] === undefined || env[key] === "") return;
@@ -83,6 +92,14 @@ export function validateEnvironment(env = process.env) {
       errors.push(`${key} must be an integer between ${minimum} and ${maximum}.`);
     }
   });
+
+  if (env.TRUST_PROXY !== undefined && env.TRUST_PROXY !== "") {
+    try {
+      parseTrustProxy(env.TRUST_PROXY);
+    } catch (error) {
+      errors.push(error.message);
+    }
+  }
 
   REQUIRED_ALWAYS.forEach((key) => {
     const value = env[key] || "";
@@ -111,6 +128,15 @@ export function validateEnvironment(env = process.env) {
 
   if (env.WHATSAPP_API_VERSION && !/^v\d+\.\d+$/.test(env.WHATSAPP_API_VERSION)) {
     errors.push("WHATSAPP_API_VERSION must use a value such as v25.0.");
+  }
+
+  if (env.JWT_REFRESH_EXPIRES_IN) {
+    const match = String(env.JWT_REFRESH_EXPIRES_IN).trim().toLowerCase().match(/^(\d+)([smhd])$/);
+    const multipliers = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+    const duration = match ? Number(match[1]) * multipliers[match[2]] : 0;
+    if (!Number.isSafeInteger(duration) || duration < 60_000 || duration > 90 * 86_400_000) {
+      errors.push("JWT_REFRESH_EXPIRES_IN must be a duration between 1 minute and 90 days.");
+    }
   }
 
   for (const key of ["APP_BASE_URL", "CLIENT_BASE_URL", "API_BASE_URL"]) {
