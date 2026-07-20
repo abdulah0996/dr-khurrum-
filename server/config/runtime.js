@@ -18,10 +18,13 @@ export function ensureRuntimeDefaults(env = process.env) {
   env.WHATSAPP_REQUIRED = env.WHATSAPP_REQUIRED || "false";
 
   if (env.NODE_ENV === "production") {
-    env.APP_BASE_URL = env.APP_BASE_URL || PRODUCTION_ORIGIN;
-    env.CLIENT_BASE_URL = env.CLIENT_BASE_URL || PRODUCTION_ORIGIN;
-    env.API_BASE_URL = env.API_BASE_URL || `${PRODUCTION_ORIGIN}/api`;
-    env.CORS_ALLOWED_ORIGINS = env.CORS_ALLOWED_ORIGINS || PRODUCTION_ORIGIN;
+    // This single-clinic deployment has one verified public origin. Pinning it
+    // prevents stale hPanel values from taking the production API offline or
+    // accidentally widening browser access.
+    env.APP_BASE_URL = PRODUCTION_ORIGIN;
+    env.CLIENT_BASE_URL = PRODUCTION_ORIGIN;
+    env.API_BASE_URL = `${PRODUCTION_ORIGIN}/api`;
+    env.CORS_ALLOWED_ORIGINS = PRODUCTION_ORIGIN;
   }
 
   return env;

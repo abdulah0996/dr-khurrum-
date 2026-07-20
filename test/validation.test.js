@@ -138,6 +138,23 @@ test("Hostinger production runtime supplies domain defaults but never generates 
   assert.match(validation.errors.join(" "), /JWT_ACCESS_SECRET/);
 });
 
+test("Hostinger production runtime pins the verified public origin", () => {
+  const environment = {
+    NODE_ENV: "production",
+    APP_BASE_URL: "http://stale.invalid/path",
+    CLIENT_BASE_URL: "*",
+    API_BASE_URL: "not-a-url",
+    CORS_ALLOWED_ORIGINS: "*"
+  };
+
+  ensureRuntimeDefaults(environment);
+
+  assert.equal(environment.APP_BASE_URL, PRODUCTION_ORIGIN);
+  assert.equal(environment.CLIENT_BASE_URL, PRODUCTION_ORIGIN);
+  assert.equal(environment.API_BASE_URL, `${PRODUCTION_ORIGIN}/api`);
+  assert.equal(environment.CORS_ALLOWED_ORIGINS, PRODUCTION_ORIGIN);
+});
+
 test("WhatsApp interactive replies are extracted and operational logs redact patient content", () => {
   assert.equal(extractIncomingText({ interactive: { button_reply: { title: "Book Appointment", id: "menu_book_appointment" } } }), "menu_book_appointment");
   assert.equal(extractIncomingText({ interactive: { list_reply: { title: "10:30 AM", id: "time:10:30" } } }), "time:10:30");
