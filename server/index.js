@@ -34,6 +34,18 @@ let server;
 ensureRuntimeDefaults();
 let startupValidation = validateEnvironment();
 
+function configurationIssueCategories(errors = []) {
+  const categories = new Set();
+  for (const error of errors) {
+    if (/JWT_|COOKIE_SECRET|ADMIN_BOOTSTRAP_TOKEN/.test(error)) categories.add("authentication");
+    else if (/MONGODB_/.test(error)) categories.add("database");
+    else if (/WHATSAPP_|META_/.test(error)) categories.add("whatsapp");
+    else if (/APP_BASE_URL|CLIENT_BASE_URL|API_BASE_URL|CORS_|TRUST_PROXY/.test(error)) categories.add("network");
+    else categories.add("runtime");
+  }
+  return [...categories];
+}
+
 function allowedOrigins() {
   const configured = String(process.env.CORS_ALLOWED_ORIGINS || "")
     .split(",")
@@ -103,6 +115,9 @@ app.use(rejectParameterPollution);
 app.use(sanitizeInput);
 app.use(generalLimiter);
 app.use((req, res, next) => {
+  if (process.env.NODE_ENV !== "test" && !startupValidation.ok && req.path.startsWith("/api") && !req.path.startsWith("/api/health")) {
+    return res.status(503).json({ message: "Service configuration is incomplete. Please try again later." });
+  }
   if (process.env.NODE_ENV !== "test" && !isDatabaseReady() && req.path.startsWith("/api") && !req.path.startsWith("/api/health") && !req.path.startsWith("/api/whatsapp/webhook")) {
     return res.status(503).json({ message: "Database connection is not available. Please try again later." });
   }
@@ -121,6 +136,7 @@ app.get("/api/health", (_req, res) => {
     mongoConnected: database.ready,
     whatsappConfigured: whatsapp.configured,
     configurationOk: startupValidation.ok,
+    configurationIssueCategories: configurationIssueCategories(startupValidation.errors),
     uptimeSeconds: Math.round(process.uptime())
   });
 });
@@ -135,7 +151,8 @@ app.get("/api/health/ready", (_req, res) => {
   res.status(ready ? 200 : 503).json({
     status: ready ? "ready" : "not_ready",
     mongoConnected: database.ready,
-    configurationOk: startupValidation.ok
+    configurationOk: startupValidation.ok,
+    configurationIssueCategories: configurationIssueCategories(startupValidation.errors)
   });
 });
 
@@ -191,9 +208,6 @@ async function start() {
     console.error(
       `Startup configuration is incomplete. The website will remain online while affected API features stay unavailable: ${startupValidation.errors.join(" ")}`
     );
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("Production configuration validation failed. See the redacted startup errors above.");
-    }
   }
 
   await new Promise((resolve, reject) => {
