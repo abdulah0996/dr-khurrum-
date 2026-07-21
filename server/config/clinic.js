@@ -1,5 +1,5 @@
 export const TIMEZONE = process.env.DEFAULT_TIMEZONE || "Asia/Karachi";
-export const VERIFIED_RECEPTION_PHONE = "+92 335 7504478";
+export const VERIFIED_RECEPTION_PHONE = "+92 324 4754566";
 
 export const VERIFIED_GENERAL_SCHEDULE = {
   workingDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],

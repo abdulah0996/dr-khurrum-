@@ -65,7 +65,8 @@ const NUMERIC_RULES = {
   RETENTION_WEBHOOK_EVENT_DAYS: [0, 36500],
   RETENTION_MESSAGE_LOG_DAYS: [0, 36500],
   RETENTION_CHAT_SESSION_DAYS: [0, 36500],
-  RETENTION_AUDIT_LOG_DAYS: [0, 36500]
+  RETENTION_AUDIT_LOG_DAYS: [0, 36500],
+  SMTP_PORT: [1, 65535]
 };
 
 export function whatsappConfigured(env = process.env) {
@@ -78,12 +79,19 @@ export function validateEnvironment(env = process.env) {
   const production = env.NODE_ENV === "production";
   const whatsappRequired = String(env.WHATSAPP_REQUIRED || "false").trim().toLowerCase() === "true";
   const adminAlertEnabled = String(env.WHATSAPP_ADMIN_ALERT_ENABLED || "false").trim().toLowerCase() === "true";
+  const emailAlertEnabled = String(env.EMAIL_APPOINTMENT_ALERT_ENABLED || "false").trim().toLowerCase() === "true";
 
   if (env.WHATSAPP_REQUIRED && !/^(?:true|false)$/i.test(String(env.WHATSAPP_REQUIRED).trim())) {
     errors.push("WHATSAPP_REQUIRED must be true or false.");
   }
   if (env.WHATSAPP_ADMIN_ALERT_ENABLED && !/^(?:true|false)$/i.test(String(env.WHATSAPP_ADMIN_ALERT_ENABLED).trim())) {
     errors.push("WHATSAPP_ADMIN_ALERT_ENABLED must be true or false.");
+  }
+  if (env.EMAIL_APPOINTMENT_ALERT_ENABLED && !/^(?:true|false)$/i.test(String(env.EMAIL_APPOINTMENT_ALERT_ENABLED).trim())) {
+    errors.push("EMAIL_APPOINTMENT_ALERT_ENABLED must be true or false.");
+  }
+  if (env.SMTP_SECURE && !/^(?:true|false)$/i.test(String(env.SMTP_SECURE).trim())) {
+    errors.push("SMTP_SECURE must be true or false.");
   }
   if (env.RUN_PATIENT_IDENTITY_MIGRATION && !/^(?:true|false)$/i.test(String(env.RUN_PATIENT_IDENTITY_MIGRATION).trim())) {
     errors.push("RUN_PATIENT_IDENTITY_MIGRATION must be true or false.");
@@ -138,6 +146,16 @@ export function validateEnvironment(env = process.env) {
     }
     if (!/^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(String(env.WHATSAPP_ADMIN_ALERT_LANGUAGE || "").trim())) {
       errors.push("WHATSAPP_ADMIN_ALERT_LANGUAGE must be a valid Meta template language code.");
+    }
+  }
+
+  if (emailAlertEnabled) {
+    const validEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+    if (String(env.EMAIL_PROVIDER || "smtp").trim().toLowerCase() !== "smtp") errors.push("EMAIL_PROVIDER must be smtp.");
+    if (!validEmail(env.EMAIL_APPOINTMENT_ALERT_TO)) errors.push("EMAIL_APPOINTMENT_ALERT_TO must be a valid email address.");
+    if (!validEmail(env.EMAIL_FROM_ADDRESS)) errors.push("EMAIL_FROM_ADDRESS must be a valid email address.");
+    for (const key of ["SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD"]) {
+      if (looksMissing(env[key] || "")) errors.push(`${key} is required when EMAIL_APPOINTMENT_ALERT_ENABLED=true.`);
     }
   }
 

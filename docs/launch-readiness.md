@@ -7,7 +7,7 @@
 - Consultant Gynecologist / ماہرِ امراضِ نسواں
 - Approved bilingual profile and appointment-assistant limitation
 - Nighat Medical Complex, complete Jhang address, physical consultation
-- Reception +92 335 7504478
+- Reception +92 324 4754566
 - Monday–Friday 09:00–14:00; weekend closure
 - No configured break
 - 10-minute slots and a daily limit of 30

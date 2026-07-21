@@ -354,6 +354,37 @@ NotificationOutboxSchema.index(
   { unique: true, partialFilterExpression: { providerMessageId: { $type: "string", $gt: "" } } }
 );
 
+export const EmailNotificationOutboxSchema = new mongoose.Schema(
+  {
+    notificationId: publicId,
+    appointmentId: { type: String, required: true, trim: true, index: true },
+    recipientEmail: { type: String, required: true, lowercase: true, trim: true },
+    status: {
+      type: String,
+      enum: ["queued", "sending", "sent", "failed", "dead_letter"],
+      default: "queued",
+      index: true
+    },
+    providerMessageId: { type: String, trim: true, default: "" },
+    attemptCount: { type: Number, default: 0, min: 0 },
+    nextRetryAt: { type: Date, default: Date.now, index: true },
+    lockedAt: Date,
+    lockExpiresAt: { type: Date, index: true },
+    lastAttemptAt: Date,
+    sentAt: Date,
+    failedAt: Date,
+    failureCode: { type: String, trim: true, default: "" },
+    failureMessageSafe: { type: String, trim: true, default: "" }
+  },
+  schemaOptions
+);
+
+EmailNotificationOutboxSchema.index(
+  { appointmentId: 1, recipientEmail: 1 },
+  { unique: true }
+);
+EmailNotificationOutboxSchema.index({ status: 1, nextRetryAt: 1, lockExpiresAt: 1 });
+
 export const AuditLogSchema = new mongoose.Schema(
   {
     auditLogId: publicId,
@@ -485,6 +516,7 @@ export const models = {
   Appointment: mongoose.models.Appointment || mongoose.model("Appointment", AppointmentSchema),
   MessageLog: mongoose.models.MessageLog || mongoose.model("MessageLog", MessageLogSchema),
   NotificationOutbox: mongoose.models.NotificationOutbox || mongoose.model("NotificationOutbox", NotificationOutboxSchema),
+  EmailNotificationOutbox: mongoose.models.EmailNotificationOutbox || mongoose.model("EmailNotificationOutbox", EmailNotificationOutboxSchema),
   AuditLog: mongoose.models.AuditLog || mongoose.model("AuditLog", AuditLogSchema),
   WhatsAppConsent: mongoose.models.WhatsAppConsent || mongoose.model("WhatsAppConsent", WhatsAppConsentSchema),
   WebhookEvent: mongoose.models.WebhookEvent || mongoose.model("WebhookEvent", WebhookEventSchema),

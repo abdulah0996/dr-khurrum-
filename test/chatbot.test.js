@@ -59,7 +59,7 @@ test("verified doctor and clinic configuration is exact and FCPS remains withhel
   assert.deepEqual(DOCTOR.pendingQualifications, ["FCPS"]);
   assert.equal(DOCTOR.specialtyEn, "Consultant Gynecologist");
   assert.equal(DOCTOR.specialtyUr, "ماہرِ امراضِ نسواں");
-  assert.equal(DOCTOR.contact, "+92 335 7504478");
+  assert.equal(DOCTOR.contact, "+92 324 4754566");
   assert.equal(VERIFIED_CLINIC.nameEn, "Nighat Medical Complex");
   assert.equal(VERIFIED_CLINIC.nameUr, "نگہت میڈیکل کمپلیکس");
   assert.match(VERIFIED_CLINIC.addressEn, /Gojra Road.*Jhang.*33200.*Pakistan/);
@@ -127,8 +127,8 @@ test("profile, clinic, reception, confirmation, and emergency content is bilingu
   const urduLocations = locationsMessage([clinic], "ur");
   assert.match(urduLocations, /نگہت میڈیکل کمپلیکس[\s\S]*10/);
   assert.doesNotMatch(urduLocations, /نماز اور کلینک کا وقفہ/);
-  assert.equal(contactReceptionMessage("en"), "For appointment assistance, please contact the reception team at +92 335 7504478 during clinic hours.");
-  assert.match(contactReceptionMessage("ur"), /\u2066\+92 335 7504478\u2069/u);
+  assert.equal(contactReceptionMessage("en"), "For appointment assistance, please contact the reception team at +92 324 4754566 during clinic hours.");
+  assert.match(contactReceptionMessage("ur"), /\u2066\+92 324 4754566\u2069/u);
   assert.match(emergencyMessage("en"), /Heavy vaginal bleeding/);
   assert.match(emergencyMessage("ur"), /بہت زیادہ اندام نہانی سے خون آنا/);
   const confirmation = appointmentConfirmation({
@@ -155,9 +155,9 @@ test("patient names allow multilingual letters and reject numbers or symbols onl
 });
 
 test("phone numbers normalize, mask, and isolate safely", () => {
-  assert.equal(normalizePhone("+92 335 7504478"), "+923357504478");
-  assert.equal(maskPhone("+92 335 7504478"), "+923****478");
-  assert.equal(isolateLtr("+92 335 7504478"), "\u2066+92 335 7504478\u2069");
+  assert.equal(normalizePhone("+92 324 4754566"), "+923244754566");
+  assert.equal(maskPhone("+92 324 4754566"), "+923****566");
+  assert.equal(isolateLtr("+92 324 4754566"), "\u2066+92 324 4754566\u2069");
 });
 
 test("environment validation blocks incomplete production configuration", () => {
@@ -196,7 +196,7 @@ test("WhatsApp policy and template helpers are safe", () => {
     appointmentId: "KHR-20260716-ABC123"
   });
   assert.equal(components[0].parameters.length, 7);
-  assert.equal(components[0].parameters[6].text, "+92 335 7504478");
+  assert.equal(components[0].parameters[6].text, "+92 324 4754566");
 });
 
 test("Meta webhook signature verification rejects invalid signatures", () => {

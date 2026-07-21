@@ -15,6 +15,7 @@ import { appointmentConfirmation, cancellationConfirmation, rescheduleConfirmati
 import { DOCTOR } from "../config/clinic.js";
 import { requireRole } from "../middleware/auth.js";
 import { retryAdminAppointmentAlert } from "../services/adminAlertService.js";
+import { retryAppointmentEmail } from "../services/appointmentEmailService.js";
 import { addAuditLogSafely } from "../services/auditService.js";
 import { adminStatusSchema, appointmentBulkDeleteSchema, appointmentCancelSchema, appointmentCreateSchema, appointmentLookupSchema, appointmentRescheduleSchema } from "../utils/validation.js";
 
@@ -147,6 +148,23 @@ router.post("/:appointmentId/admin-alert/retry", requireRole("Super Admin", "Rec
       req
     });
     res.json({ adminAlert });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/:appointmentId/email-alert/retry", requireRole("Super Admin", "Receptionist"), async (req, res, next) => {
+  try {
+    const emailAlert = await retryAppointmentEmail(req.params.appointmentId);
+    await addAuditLogSafely({
+      actor: req.user,
+      action: "Appointment email retry requested",
+      module: "Appointments",
+      targetType: "Appointment",
+      targetId: req.params.appointmentId,
+      req
+    });
+    res.json({ emailAlert });
   } catch (error) {
     next(error);
   }

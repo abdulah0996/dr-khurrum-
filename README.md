@@ -9,7 +9,7 @@ This repository contains the existing bilingual React/Vite, Express, Mongoose, a
 - Specialty: Consultant Gynecologist / ماہرِ امراضِ نسواں
 - Clinic: Nighat Medical Complex, Jhang
 - Address: Gojra Road, near Post Office, Jhang Sadar, Samanabad, Jhang, 33200, Pakistan
-- Reception: +92 335 7504478
+- Reception: +92 324 4754566
 - Schedule: Monday–Friday, 09:00–17:00; Saturday and Sunday closed
 - Break: 13:00–14:00
 - Appointments: 15 minutes, 28 time-linked tokens per working day

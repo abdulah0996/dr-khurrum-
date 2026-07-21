@@ -362,6 +362,7 @@ test("bulk deletion removes only selected appointments and their pending admin a
   const selected = ["KHR-20260720-ONE001", "KHR-20260720-TWO002"];
   let appointmentDeleteFilter;
   let alertDeleteFilter;
+  let emailAlertDeleteFilter;
   models.Appointment.find = () => ({
     select() { return this; },
     session() { return this; },
@@ -375,10 +376,15 @@ test("bulk deletion removes only selected appointments and their pending admin a
     alertDeleteFilter = filter;
     return { deletedCount: 1 };
   };
+  models.EmailNotificationOutbox.deleteMany = async (filter) => {
+    emailAlertDeleteFilter = filter;
+    return { deletedCount: 1 };
+  };
 
   const result = await deleteAppointments(selected, { role: "Super Admin", userId: "USR-QA" });
 
   assert.deepEqual(appointmentDeleteFilter, { appointmentId: { $in: selected } });
   assert.deepEqual(alertDeleteFilter, { appointmentId: { $in: selected } });
+  assert.deepEqual(emailAlertDeleteFilter, { appointmentId: { $in: selected } });
   assert.deepEqual(result, { requestedCount: 2, deletedCount: 2, missingCount: 0 });
 });

@@ -25,6 +25,7 @@ import { ensureClinicConfiguration } from "./services/clinicConfigService.js";
 import { getWhatsAppStatus } from "./services/whatsappService.js";
 import { ensureConfiguredRetention } from "./services/retentionService.js";
 import { startAdminAlertWorker, stopAdminAlertWorker } from "./services/adminAlertService.js";
+import { startAppointmentEmailWorker, stopAppointmentEmailWorker } from "./services/appointmentEmailService.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
@@ -40,6 +41,7 @@ function configurationIssueCategories(errors = []) {
     if (/JWT_|COOKIE_SECRET|ADMIN_BOOTSTRAP_TOKEN/.test(error)) categories.add("authentication");
     else if (/MONGODB_/.test(error)) categories.add("database");
     else if (/WHATSAPP_|META_/.test(error)) categories.add("whatsapp");
+    else if (/EMAIL_|SMTP_/.test(error)) categories.add("email");
     else if (/APP_BASE_URL|CLIENT_BASE_URL|API_BASE_URL|CORS_|TRUST_PROXY/.test(error)) categories.add("network");
     else categories.add("runtime");
   }
@@ -230,6 +232,7 @@ async function start() {
       await ensureClinicConfiguration();
       markDatabaseInitialized();
       startAdminAlertWorker();
+      startAppointmentEmailWorker();
     } else {
       console.warn("MongoDB is unavailable. The website remains online and API routes will return 503 until the database connection is restored.");
     }
@@ -242,6 +245,7 @@ async function start() {
       await ensureConfiguredRetention();
       await ensureClinicConfiguration();
       startAdminAlertWorker();
+      startAppointmentEmailWorker();
       console.log("MongoDB recovery completed; database API routes are available again.");
     }
   });
@@ -250,6 +254,7 @@ async function start() {
 async function shutdown(signal, exitCode = 0) {
   console.log(`${signal} received. Shutting down appointment chatbot API...`);
   stopAdminAlertWorker();
+  stopAppointmentEmailWorker();
   await new Promise((resolve) => {
     if (!server) return resolve();
     return server.close(resolve);

@@ -5,6 +5,7 @@ import { getDoctorProfile, getLocation } from "./clinicConfigService.js";
 import { minutesUntilLocalAppointment, validateSlotAvailability } from "./slotService.js";
 import { addAuditLogSafely } from "./auditService.js";
 import { adminAlertsForAppointments, queueAdminAppointmentAlert, scheduleAdminAlertProcessing } from "./adminAlertService.js";
+import { appointmentEmailsForAppointments, publicAppointmentEmail, queueAppointmentEmail, scheduleAppointmentEmail } from "./appointmentEmailService.js";
 import { appointmentCreateSchema, appointmentLookupSchema, appointmentRescheduleSchema, appointmentCancelSchema } from "../utils/validation.js";
 import { escapeRegex, makeAppointmentId, makePublicId, maskPhone, normalizePhone } from "../utils/time.js";
 
@@ -78,7 +79,11 @@ export async function listAppointments(filters = {}) {
     ];
   }
   const appointments = await models.Appointment.find(query).sort({ date: -1, time: -1 }).limit(Math.min(Number(filters.limit || 500), 1000)).lean();
-  const alertMap = await adminAlertsForAppointments(appointments.map((item) => item.appointmentId));
+  const appointmentIds = appointments.map((item) => item.appointmentId);
+  const [alertMap, emailMap] = await Promise.all([
+    adminAlertsForAppointments(appointmentIds),
+    appointmentEmailsForAppointments(appointmentIds)
+  ]);
   return appointments.map((item) => ({
     appointmentId: item.appointmentId,
     patientName: item.patientName,
@@ -97,6 +102,7 @@ export async function listAppointments(filters = {}) {
     status: item.status,
     source: item.source,
     adminAlert: alertMap.get(item.appointmentId) || null,
+    emailAlert: emailMap.get(item.appointmentId) || publicAppointmentEmail(null),
     requiresReschedule: Boolean(item.requiresReschedule),
     rescheduleReason: item.rescheduleReason || "",
     createdAt: item.createdAt,
@@ -126,7 +132,11 @@ export async function listAppointmentsPage(filters = {}) {
     models.Appointment.find(query).sort({ date: -1, time: -1, _id: -1 }).skip((page - 1) * limit).limit(limit).lean(),
     models.Appointment.countDocuments(query)
   ]);
-  const alertMap = await adminAlertsForAppointments(items.map((item) => item.appointmentId));
+  const appointmentIds = items.map((item) => item.appointmentId);
+  const [alertMap, emailMap] = await Promise.all([
+    adminAlertsForAppointments(appointmentIds),
+    appointmentEmailsForAppointments(appointmentIds)
+  ]);
   const appointments = items.map((item) => ({
     appointmentId: item.appointmentId,
     patientName: item.patientName,
@@ -145,6 +155,7 @@ export async function listAppointmentsPage(filters = {}) {
     status: item.status,
     source: item.source,
     adminAlert: alertMap.get(item.appointmentId) || null,
+    emailAlert: emailMap.get(item.appointmentId) || publicAppointmentEmail(null),
     requiresReschedule: Boolean(item.requiresReschedule),
     rescheduleReason: item.rescheduleReason || "",
     createdAt: item.createdAt,
@@ -165,6 +176,7 @@ export async function deleteAppointments(appointmentIds, actor = null, req = nul
   const session = await mongoose.startSession();
   let deletedCount = 0;
   let deletedAlertCount = 0;
+  let deletedEmailAlertCount = 0;
   try {
     await session.withTransaction(async () => {
       const appointments = await models.Appointment.find({ appointmentId: { $in: uniqueIds } })
@@ -173,12 +185,14 @@ export async function deleteAppointments(appointmentIds, actor = null, req = nul
         .lean();
       const foundIds = appointments.map((appointment) => appointment.appointmentId);
       if (!foundIds.length) return;
-      const [appointmentResult, alertResult] = await Promise.all([
+      const [appointmentResult, alertResult, emailAlertResult] = await Promise.all([
         models.Appointment.deleteMany({ appointmentId: { $in: foundIds } }, { session }),
-        models.NotificationOutbox.deleteMany({ appointmentId: { $in: foundIds } }, { session })
+        models.NotificationOutbox.deleteMany({ appointmentId: { $in: foundIds } }, { session }),
+        models.EmailNotificationOutbox.deleteMany({ appointmentId: { $in: foundIds } }, { session })
       ]);
       deletedCount = appointmentResult.deletedCount || 0;
       deletedAlertCount = alertResult.deletedCount || 0;
+      deletedEmailAlertCount = emailAlertResult.deletedCount || 0;
     });
 
     if (deletedCount) {
@@ -188,7 +202,7 @@ export async function deleteAppointments(appointmentIds, actor = null, req = nul
         module: "Appointments",
         targetType: "AppointmentBatch",
         targetId: `${deletedCount} appointment(s)`,
-        metadata: { appointmentIds: uniqueIds, deletedCount, deletedAlertCount },
+        metadata: { appointmentIds: uniqueIds, deletedCount, deletedAlertCount, deletedEmailAlertCount },
         req
       });
     }
@@ -250,6 +264,7 @@ export async function createAppointment(input, actor = null, req = null) {
   try {
     let appointment;
     let adminAlertQueued = false;
+    let emailAlertQueued = false;
     await session.withTransaction(async () => {
       const patientDetails = {
         fullName: parsed.fullName,
@@ -335,6 +350,7 @@ export async function createAppointment(input, actor = null, req = null) {
         { session }
       ).then((items) => items[0]);
       adminAlertQueued = (await queueAdminAppointmentAlert(appointment, { session })).queued;
+      emailAlertQueued = (await queueAppointmentEmail(appointment, { session })).queued;
     });
 
     await addAuditLogSafely({
@@ -348,6 +364,7 @@ export async function createAppointment(input, actor = null, req = null) {
     });
 
     if (adminAlertQueued) scheduleAdminAlertProcessing(appointment.appointmentId);
+    if (emailAlertQueued) scheduleAppointmentEmail(appointment.appointmentId);
 
     return appointment.toObject();
   } catch (error) {

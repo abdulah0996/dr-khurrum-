@@ -32,7 +32,7 @@ import { displayDate, displayLongDate, displayTime, statusClass, todayIso } from
 
 const PRODUCT = "Dr. Khurrum Mansoor WhatsApp AI Appointment Chatbot";
 const DOCTOR = "Dr. Khurrum Mansoor";
-const CONTACT = "+92 335 7504478";
+const CONTACT = "+92 324 4754566";
 
 const initialData = {
   settings: null,
@@ -691,6 +691,18 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
     }
   };
 
+  const retryEmail = async (appointment) => {
+    const actionKey = "email:" + appointment.appointmentId;
+    setActionLoading(actionKey);
+    try {
+      await api("/appointments/" + appointment.appointmentId + "/email-alert/retry", { method: "POST" });
+      await loadPage(pagination.page);
+      flash("Appointment email queued for delivery.");
+    } finally {
+      setActionLoading("");
+    }
+  };
+
   const toggleSelected = (appointmentId) => {
     setSelectedIds((current) => current.includes(appointmentId)
       ? current.filter((id) => id !== appointmentId)
@@ -785,6 +797,11 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
                 {actionLoading === `alert:${appointment.appointmentId}` ? "Retrying…" : "Retry Alert"}
               </button>
             )}
+            {appointment.emailAlert?.canRetry && (
+              <button type="button" className="ghost-button" disabled={Boolean(actionLoading)} onClick={() => retryEmail(appointment)}>
+                {actionLoading === "email:" + appointment.appointmentId ? "Retrying email..." : "Retry Email"}
+              </button>
+            )}
             </>
           )}
         />
@@ -852,6 +869,9 @@ function AppointmentTable({ appointments, actions, loading = false, selectable =
                 {appointment.requiresReschedule && <small className="attention-text">Staff action required</small>}
                 {appointment.adminAlert?.status && (
                   <small>Personal alert: {appointment.adminAlert.status === "dead_letter" ? "Failed" : appointment.adminAlert.status.charAt(0).toUpperCase() + appointment.adminAlert.status.slice(1)}</small>
+                )}
+                {appointment.emailAlert?.status && (
+                  <small>Email: {appointment.emailAlert.status === "dead_letter" ? "Failed" : appointment.emailAlert.status.replace("_", " ").replace(/^./, (value) => value.toUpperCase())}</small>
                 )}
               </td>
               {actions && <td className="row-actions">{actions(appointment)}</td>}
