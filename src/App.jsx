@@ -16,6 +16,7 @@ import {
   Paperclip,
   Phone,
   Plus,
+  Printer,
   RefreshCw,
   Save,
   Search,
@@ -29,6 +30,7 @@ import {
   XCircle
 } from "lucide-react";
 import { displayDate, displayLongDate, displayTime, statusClass, todayIso } from "./lib/format.js";
+import { printAppointmentToken } from "./lib/printToken.js";
 
 const PRODUCT = "Dr. Khurrum Mansoor WhatsApp AI Appointment Chatbot";
 const DOCTOR = "Dr. Khurrum Mansoor";
@@ -528,7 +530,15 @@ function TodayView({ appointments, loading }) {
             <p>Only real bookings saved in MongoDB appear here.</p>
           </div>
         </div>
-        <AppointmentTable appointments={todaysAppointments} loading={loading} />
+        <AppointmentTable
+          appointments={todaysAppointments}
+          loading={loading}
+          actions={(appointment) => ["Booked", "Rescheduled"].includes(appointment.status) && (
+            <button type="button" title="Print Token" onClick={() => printAppointmentToken(appointment, { doctorName: DOCTOR, receptionContact: CONTACT })}>
+              <Printer size={15} />
+            </button>
+          )}
+        />
       </section>
     </div>
   );
@@ -779,6 +789,9 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
           actions={(appointment) => (
             <>
             {["Booked", "Rescheduled"].includes(appointment.status) && <>
+              <button type="button" title="Print Token" onClick={() => printAppointmentToken(appointment, { doctorName: DOCTOR, receptionContact: CONTACT })}>
+                <Printer size={15} />
+              </button>
               <button title="Reschedule" disabled={actionLoading === appointment.appointmentId} onClick={() => setReschedule(appointment)}>
                 <RefreshCw size={15} />
               </button>
