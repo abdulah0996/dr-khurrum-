@@ -16,6 +16,7 @@ import { runSafeMigrations } from "../server/db/migrations.js";
 import { issueAuthSession, rotateAuthSession } from "../server/services/authSessionService.js";
 import { acquireInvariantLock } from "../server/services/adminInvariantService.js";
 import { buildAdminAlertParameters, queueAdminAppointmentAlert } from "../server/services/adminAlertService.js";
+import { updateDoctorProfile } from "../server/services/clinicConfigService.js";
 
 async function attemptSuperAdminDemotion(userId) {
   const session = await mongoose.startSession();
@@ -72,6 +73,24 @@ async function run() {
     assert.equal(await models.ClinicLocation.countDocuments({ slug: VERIFIED_CLINIC.slug }), 1);
     assert.equal(await models.ScheduleRule.countDocuments({ locationId: verifiedClinic.locationId }), 1);
     assert.equal(await models.DoctorProfile.countDocuments({ profileKey: "primary" }), 1);
+    const updatedDoctor = await updateDoctorProfile({
+      nameEn: "Dr. Khurrum Mansoor",
+      nameUr: "ڈاکٹر خرم منصور",
+      qualificationsEn: "MBBS",
+      qualificationsUr: "ایم بی بی ایس",
+      specialtyEn: "Consultant Gynecologist",
+      specialtyUr: "ماہر امراض نسواں",
+      biographyEn: "Verified integration profile.",
+      biographyUr: "تصدیق شدہ پروفائل۔",
+      receptionPhone: "+923001234567",
+      pendingQualifications: ["FCPS"],
+      languages: ["English", "Urdu"],
+      services: [],
+      profileImage: "",
+      active: true
+    });
+    assert.equal(updatedDoctor.receptionPhone, "+923001234567");
+    assert.deepEqual(updatedDoctor.pendingQualifications, ["FCPS"]);
     await Promise.all([
       models.ScheduleRule.deleteMany({ locationId: verifiedClinic.locationId }),
       models.ClinicLocation.deleteMany({ locationId: verifiedClinic.locationId }),

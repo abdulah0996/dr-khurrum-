@@ -127,7 +127,7 @@ export async function updateDoctorProfile(payload) {
     { profileKey: "primary" },
     {
       $set: { ...payload, profileKey: "primary" },
-      $setOnInsert: { doctorProfileId: makePublicId("DOC"), pendingQualifications: DOCTOR.pendingQualifications || [] }
+      $setOnInsert: { doctorProfileId: makePublicId("DOC") }
     },
     { returnDocument: "after", upsert: true, setDefaultsOnInsert: true, runValidators: true }
   ).lean();
