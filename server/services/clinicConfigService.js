@@ -1,9 +1,20 @@
-import { DEFAULT_LOCATIONS, DOCTOR } from "../config/clinic.js";
+import { DEFAULT_LOCATIONS, DOCTOR, LEGACY_RECEPTION_PHONE, VERIFIED_RECEPTION_PHONE } from "../config/clinic.js";
 import { models } from "../models/index.js";
 import { makePublicId } from "../utils/time.js";
 
 export async function ensureClinicConfiguration() {
   await Promise.all(Object.values(models).map((model) => model.init()));
+
+  await Promise.all([
+    models.ClinicLocation.updateMany(
+      { phone: LEGACY_RECEPTION_PHONE },
+      { $set: { phone: VERIFIED_RECEPTION_PHONE } }
+    ),
+    models.DoctorProfile.updateMany(
+      { receptionPhone: LEGACY_RECEPTION_PHONE },
+      { $set: { receptionPhone: VERIFIED_RECEPTION_PHONE } }
+    )
+  ]);
 
   for (const item of DEFAULT_LOCATIONS) {
     let location = await models.ClinicLocation.findOne({ slug: item.slug });

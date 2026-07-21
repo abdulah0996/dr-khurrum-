@@ -54,5 +54,5 @@ Production rules:
 - For a web-only launch, set `WHATSAPP_REQUIRED=false`; missing Meta credentials then produce a warning and WhatsApp sends are skipped.
 - After Meta setup is complete, set `WHATSAPP_REQUIRED=true` so production fails closed if a required WhatsApp credential is removed.
 - Do not place missing-information markers in patient-visible content.
-- `DOCTOR_RECEPTION_PHONE` may retain `+92 324 4754566`; it is not a secret.
+- The verified production reception number is pinned to `+92 324 4754566`; stale environment or database values using the former number are replaced safely at startup.
 - `DEFAULT_TIMEZONE` must remain `Asia/Karachi` unless newer client-approved information is supplied.

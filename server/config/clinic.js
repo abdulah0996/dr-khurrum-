@@ -1,4 +1,5 @@
 export const TIMEZONE = process.env.DEFAULT_TIMEZONE || "Asia/Karachi";
+export const LEGACY_RECEPTION_PHONE = "+92 335 7504478";
 export const VERIFIED_RECEPTION_PHONE = "+92 324 4754566";
 
 export const VERIFIED_GENERAL_SCHEDULE = {
@@ -30,7 +31,7 @@ export const DOCTOR = {
     "Dr. Khurrum Mansoor is a Consultant Gynecologist with an MBBS qualification. He provides professional consultation and care for women’s health, pregnancy-related concerns, reproductive health, menstrual problems and other gynecological conditions.\n\nThe chatbot helps patients book, check, reschedule and cancel appointments. It does not provide a medical diagnosis, prescribe medicine or replace an examination by a qualified doctor.",
   biographyUr:
     "ڈاکٹر خرم منصور ایم بی بی ایس کی قابلیت رکھنے والے ماہرِ امراضِ نسواں ہیں۔ وہ خواتین کی صحت، حمل سے متعلق مسائل، تولیدی صحت، ماہواری کی بے قاعدگیوں اور دیگر نسوانی مسائل کے لیے پیشہ ورانہ مشاورت فراہم کرتے ہیں۔\n\nیہ چیٹ بوٹ مریضوں کو اپائنٹمنٹ بک کرنے، چیک کرنے، تبدیل کرنے یا منسوخ کرنے میں مدد دیتا ہے۔ یہ چیٹ بوٹ بیماری کی تشخیص، دوا تجویز کرنے یا ڈاکٹر کے طبی معائنے کی جگہ لینے کے لیے نہیں ہے۔",
-  contact: process.env.DOCTOR_RECEPTION_PHONE || VERIFIED_RECEPTION_PHONE
+  contact: VERIFIED_RECEPTION_PHONE
 };
 
 export const VERIFIED_CLINIC = {
