@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { buildTokenFields } from "../src/lib/printToken.js";
 
-test("print token contains operational appointment details without medical or phone data", () => {
+test("print token contains the patient phone and operational details without medical data", () => {
   const appointment = {
     appointmentId: "KHR-20260725-PRINT1",
     patientName: "Test Patient",
@@ -20,7 +20,8 @@ test("print token contains operational appointment details without medical or ph
   const serialized = JSON.stringify(buildTokenFields(appointment));
   assert.match(serialized, /Test Patient|KHR-20260725-PRINT1|Dr\. Khurrum Mansoor|Nighat Medical Complex/);
   assert.match(serialized, /\+92 324 4754566/);
-  assert.doesNotMatch(serialized, /private medical reason|923000000001/);
+  assert.match(serialized, /\+923000000001/);
+  assert.doesNotMatch(serialized, /private medical reason/);
 });
 
 test("appointment lists expose Print Token actions for active appointments", () => {

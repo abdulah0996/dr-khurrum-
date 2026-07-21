@@ -66,14 +66,15 @@ test("Gmail SMTP configuration is normalized and validated without exposing cred
   assert.deepEqual(validateAppointmentEmailConfig(config), { ok: true, enabled: true });
 });
 
-test("appointment email contains operational fields and excludes medical and phone data", () => {
+test("appointment email contains the patient phone but excludes medical data", () => {
   configureEmail();
   const message = buildAppointmentEmail(appointment());
   assert.match(message.subject, /Email Test Patient/);
   assert.match(message.text, /KHR-20260725-EMAIL1/);
   assert.match(message.text, /Nighat Medical Complex/);
   assert.match(message.text, /\+92 324 4754566/);
-  assert.doesNotMatch(message.text + message.html, /private medical reason|reasonForVisit|923000000001/);
+  assert.match(message.text + message.html, /\+923000000001/);
+  assert.doesNotMatch(message.text + message.html, /private medical reason|reasonForVisit/);
 });
 
 test("email outbox enforces one recipient notification per appointment", () => {

@@ -61,6 +61,7 @@ function escapeHtml(value) {
 export function buildAppointmentEmail(appointment, config = appointmentEmailConfig()) {
   const fields = [
     ["Patient", appointment?.patientName],
+    ["Patient Phone", appointment?.normalizedPhone || appointment?.phone],
     ["Doctor", appointment?.doctorName || DOCTOR.nameEn],
     ["Clinic", appointment?.locationNameEn || VERIFIED_CLINIC.nameEn],
     ["Date", appointment?.date ? displayDate(appointment.date, "en") : ""],

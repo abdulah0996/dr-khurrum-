@@ -6,6 +6,7 @@ export function buildTokenFields(appointment, {
 } = {}) {
   return [
     ["Patient", appointment?.patientName || "-"],
+    ["Patient Phone", appointment?.normalizedPhone || appointment?.phone || "-"],
     ...(appointment?.age ? [["Age", String(appointment.age)]] : []),
     ...(appointment?.gender ? [["Gender", appointment.gender]] : []),
     ["Appointment ID", appointment?.appointmentId || "-"],
