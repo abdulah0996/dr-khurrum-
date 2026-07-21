@@ -535,7 +535,7 @@ function TodayView({ appointments, loading }) {
           loading={loading}
           actions={(appointment) => ["Booked", "Rescheduled"].includes(appointment.status) && (
             <button type="button" title="Print Token" onClick={() => printAppointmentToken(appointment, { doctorName: DOCTOR, receptionContact: CONTACT })}>
-              <Printer size={15} />
+              <Printer size={15} /> Print
             </button>
           )}
         />
@@ -790,7 +790,7 @@ function AppointmentsView({ appointments, initialPagination, loading, api, refre
             <>
             {["Booked", "Rescheduled"].includes(appointment.status) && <>
               <button type="button" title="Print Token" onClick={() => printAppointmentToken(appointment, { doctorName: DOCTOR, receptionContact: CONTACT })}>
-                <Printer size={15} />
+                <Printer size={15} /> Print
               </button>
               <button title="Reschedule" disabled={actionLoading === appointment.appointmentId} onClick={() => setReschedule(appointment)}>
                 <RefreshCw size={15} />

@@ -26,6 +26,7 @@ test("print token contains operational appointment details without medical or ph
 test("appointment lists expose Print Token actions for active appointments", () => {
   const app = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
   assert.match(app, /title="Print Token"/);
+  assert.match(app, /<Printer size=\{15\} \/> Print/);
   assert.match(app, /printAppointmentToken\(appointment/);
   assert.match(app, /\["Booked", "Rescheduled"\]\.includes\(appointment\.status\)/);
 });
