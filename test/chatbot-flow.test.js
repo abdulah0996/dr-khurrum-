@@ -131,12 +131,12 @@ test("a mocked end-to-end booking asks only name, mobile, date, time, and confir
   const nameReply = await chat("1");
   assert.match(nameReply.text, /full name/i);
   assert.match(nameReply.text, /Step 1 of 5/);
-  assert.match((await chat("Patient Name")).text, /phone number/i);
+  assert.match((await chat("Patient Name")).text, /mobile number/i);
   const dateReply = await chat("03001234567");
-  assert.match(dateReply.text, /available date/i);
+  assert.match(dateReply.text, /appointment date/i);
   assert.match(dateReply.text, /Step 3 of 5/);
   const timeReply = await chat("1");
-  assert.match(timeReply.text, /available time/i);
+  assert.match(timeReply.text, /appointment time/i);
   const confirmation = await chat("1");
   assert.match(confirmation.text, /Please confirm appointment/i);
   assert.match(confirmation.text, /Token:\s*1/);
@@ -300,12 +300,12 @@ test("consent acceptance persists once and immediately enables the conversationa
   assert.equal(first.nextStep, "book_name");
   assert.equal(first.input.mode, "text");
   assert.equal(first.input.placeholder, "Enter patient’s full name…");
-  assert.match(first.text, /What is the patient’s full name/);
+  assert.match(first.text, /Enter your full name/);
 
   const resumed = await resumeChatSession({ phone: "+92 300 1234567" });
   assert.equal(resumed.nextStep, "book_name");
   assert.equal(resumed.input.placeholder, "Enter patient’s full name…");
-  assert.match(resumed.text, /Ahmed Khan/);
+  assert.match(resumed.text, /Enter your full name/);
 });
 
 test("consent rejection stops collection and returns only safe exit choices", async () => {
@@ -344,7 +344,7 @@ test("patient names validate English and Urdu input, reject unsafe values, persi
     });
     const reply = await chat(invalid);
     assert.equal(session.step, "book_name");
-    assert.match(reply.text, /complete name/i);
+    assert.match(reply.text, /valid full name/i);
   }
 
   for (const name of ["Ahmed Khan", "علی احمد"]) {
@@ -360,7 +360,7 @@ test("patient names validate English and Urdu input, reject unsafe values, persi
     assert.equal(session.draft.fullName, name);
     assert.equal(reply.nextStep, "book_phone");
     assert.equal(reply.input.mode, "text");
-    assert.match(reply.text, /phone|فون/u);
+    assert.match(reply.text, /mobile|موبائل/u);
   }
 });
 
@@ -395,10 +395,10 @@ test("appointment cancellation asks only reason and confirmation for the caller'
   assert.match(lookup.text, /Token Number: 1/);
 
   const cancellationStart = await chat("4");
-  assert.match(cancellationStart.text, /cancellation reason/i);
+  assert.match(cancellationStart.text, /reason to cancel/i);
   assert.match(cancellationStart.text, new RegExp(current.appointmentId));
   assert.equal(session.step, "cancel_reason");
-  assert.match((await chat("Schedule conflict")).text, /sure you want to cancel/i);
+  assert.match((await chat("Schedule conflict")).text, /confirm cancellation/i);
   const cancelled = await chat("1");
   assert.equal(cancelled.appointment.status, "Cancelled");
   assert.equal(Object.hasOwn(cancelled.appointment, "cancelledReason"), false);

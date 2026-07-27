@@ -165,7 +165,7 @@ async function askDates(session, locationId, nextStep) {
   await saveSession(session, { step: nextStep, draft: session.draft });
 
   return {
-    text: language === "ur" ? "دستیاب تاریخ منتخب کریں۔" : "Please select an available date.",
+    text: language === "ur" ? "اپائنٹمنٹ کی تاریخ منتخب کریں۔" : "Select an appointment date.",
     options: dates.map((item) => option(displayDate(item.date, language), dateAction(item.date), item.day)),
     language
   };
@@ -194,7 +194,7 @@ async function askSlots(session, locationId, date, nextStep, requestedPage = 0) 
     : "";
 
   return {
-    text: language === "ur" ? `دستیاب وقت منتخب کریں۔${pageLabel}` : `Please select an available time slot.${pageLabel}`,
+    text: language === "ur" ? `اپائنٹمنٹ کا وقت منتخب کریں۔ ٹوکن نیچے دکھایا گیا ہے۔${pageLabel}` : `Select an appointment time. Your token is shown below.${pageLabel}`,
     options: [
       ...pageSlots.map((slot) => option(displayTime(slot.time, language), timeAction(slot.time, date), `${language === "ur" ? "ٹوکن" : "Token"} ${slot.tokenNumber}`)),
       ...pagination
@@ -218,40 +218,15 @@ function bookingProgress(language, step, text) {
     ? ["مریض کا نام", "موبائل نمبر", "تاریخ", "وقت اور ٹوکن", "تصدیق"]
     : ["Patient Name", "Mobile Number", "Date", "Time & Token", "Confirmation"];
   const label = language === "ur" ? `مرحلہ ${step} از 5 — ${labels[step - 1]}` : `Step ${step} of 5 — ${labels[step - 1]}`;
-  const menuHint = language === "ur" ? "مین مینو کے لیے MENU لکھیں۔" : "Type MENU at any time for the main menu.";
-  return `${label}\n${text}\n\n${menuHint}`;
+  return `${label}\n${text}`;
 }
 
 function patientNamePrompt(language = "en") {
-  return ask(
-    language,
-    [
-      "👤 Patient Name",
-      "",
-      "What is the patient’s full name?",
-      "",
-      "Please enter the name as it appears on the patient’s records.",
-      "",
-      "Example: Ahmed Khan"
-    ].join("\n"),
-    [
-      "👤 مریض کا نام",
-      "",
-      "مریض کا مکمل نام کیا ہے؟",
-      "",
-      "براہِ کرم نام مریض کے ریکارڈ کے مطابق لکھیں۔",
-      "",
-      "مثال: علی احمد"
-    ].join("\n")
-  );
+  return ask(language, "Enter your full name to book an appointment.", "اپائنٹمنٹ بک کرنے کے لیے اپنا مکمل نام لکھیں۔");
 }
 
 function patientPhonePrompt(language = "en", fullName = "") {
-  return ask(
-    language,
-    `${fullName ? `✅ Name Recorded\n\nThank you, ${fullName}.\n\n` : ""}📱 Please enter the patient’s phone number.`,
-    `${fullName ? `✅ نام درج کر لیا گیا\n\nشکریہ، ${fullName}۔\n\n` : ""}📱 براہِ کرم مریض کا فون نمبر لکھیں۔`
-  );
+  return ask(language, "Enter your mobile number.", "اپنا موبائل نمبر لکھیں۔");
 }
 
 function chatInputForStep(step, language = "en") {
@@ -290,12 +265,7 @@ async function handleMenu(session, value) {
       step: "book_name",
       draft: { consentAccepted: true, consentAcceptedAt: new Date() }
     });
-    const privacyNotice = ask(
-      language,
-      "By continuing, you agree that your booking details may be saved for appointment management.\n\n",
-      "جاری رکھنے سے آپ اپنی بکنگ کی تفصیلات اپائنٹمنٹ کے انتظام کے لیے محفوظ کرنے سے متفق ہیں۔\n\n"
-    );
-    return { text: bookingProgress(language, 1, `${privacyNotice}${patientNamePrompt(language)}`), language };
+    return { text: bookingProgress(language, 1, patientNamePrompt(language)), language };
   }
 
   if (intent === "cancel") {
@@ -319,8 +289,8 @@ async function handleMenu(session, value) {
     return {
       text: ask(
         language,
-        `Appointment ${appointment.appointmentId} on ${displayDate(appointment.date, language)} at ${displayTime(appointment.time, language)} was found.\n\nPlease write a short cancellation reason.`,
-        `اپائنٹمنٹ ${appointment.appointmentId} مل گئی ہے۔\n\nبراہِ کرم منسوخی کی مختصر وجہ لکھیں۔`
+        `Enter a reason to cancel appointment ${appointment.appointmentId}.`,
+        `اپائنٹمنٹ ${appointment.appointmentId} منسوخ کرنے کی وجہ لکھیں۔`
       ),
       language
     };
@@ -407,11 +377,11 @@ async function handleBooking(session, value) {
   }
   if (session.step === "book_name") {
     if (String(value).length > 100) {
-      return { text: ask(language, "⚠️ Please enter the patient’s complete name.\n\nExample: Ahmed Khan", "⚠️ براہِ کرم مریض کا مکمل نام لکھیں۔\n\nمثال: علی احمد"), language };
+      return { text: ask(language, "Enter a valid full name.", "درست مکمل نام لکھیں۔"), language };
     }
     draft.fullName = compactText(value, 100);
     if (!isValidPatientName(draft.fullName)) {
-      return { text: ask(language, "⚠️ Please enter the patient’s complete name.\n\nExample: Ahmed Khan", "⚠️ براہِ کرم مریض کا مکمل نام لکھیں۔\n\nمثال: علی احمد"), language };
+      return { text: ask(language, "Enter a valid full name.", "درست مکمل نام لکھیں۔"), language };
     }
     await saveSession(session, { step: "book_phone", draft });
     return { text: bookingProgress(language, 2, patientPhonePrompt(language, draft.fullName)), language };
@@ -714,7 +684,7 @@ async function handleCancel(session, value) {
     if (draft.reason.length < 2) return { text: ask(language, "Please write a cancellation reason.", "براہِ کرم منسوخی کی وجہ لکھیں۔"), language };
     await saveSession(session, { step: "cancel_confirm", draft });
     return {
-      text: ask(language, "Are you sure you want to cancel this appointment?", "کیا آپ واقعی یہ اپائنٹمنٹ منسوخ کرنا چاہتے ہیں؟"),
+      text: ask(language, "Confirm cancellation?", "کیا منسوخی کی تصدیق کرتے ہیں؟"),
       options: [option("Yes, cancel", ACTIONS.confirmCancellation), option("Keep appointment", ACTIONS.keepAppointment)],
       language
     };
