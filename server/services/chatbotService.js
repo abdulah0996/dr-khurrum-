@@ -1,7 +1,7 @@
 import { models } from "../models/index.js";
 import { DOCTOR } from "../config/clinic.js";
 import { getDoctorProfile, listLocations, listSchedules } from "./clinicConfigService.js";
-import { cancelAppointment, createAppointment, getAppointmentById, lookupAppointmentSafe, rescheduleAppointment, toPublicAppointment } from "./appointmentService.js";
+import { cancelAppointment, createAppointment, findNextActiveAppointmentByPhone, getAppointmentById, lookupAppointmentSafe, rescheduleAppointment, toPublicAppointment } from "./appointmentService.js";
 import { getAvailability, getUpcomingAvailableDates } from "./slotService.js";
 import {
   appointmentConfirmation,
@@ -215,9 +215,9 @@ function ask(language, en, ur) {
 
 function bookingProgress(language, step, text) {
   const labels = language === "ur"
-    ? ["رضامندی", "مریض کی تفصیلات", "کلینک", "تاریخ", "وقت", "تصدیق"]
-    : ["Consent", "Patient Details", "Clinic", "Date", "Time", "Confirmation"];
-  const label = language === "ur" ? `مرحلہ ${step} از 6 — ${labels[step - 1]}` : `Step ${step} of 6 — ${labels[step - 1]}`;
+    ? ["مریض کا نام", "موبائل نمبر", "تاریخ", "وقت اور ٹوکن", "تصدیق"]
+    : ["Patient Name", "Mobile Number", "Date", "Time & Token", "Confirmation"];
+  const label = language === "ur" ? `مرحلہ ${step} از 5 — ${labels[step - 1]}` : `Step ${step} of 5 — ${labels[step - 1]}`;
   const menuHint = language === "ur" ? "مین مینو کے لیے MENU لکھیں۔" : "Type MENU at any time for the main menu.";
   return `${label}\n${text}\n\n${menuHint}`;
 }
@@ -286,6 +286,47 @@ async function handleMenu(session, value) {
   const intent = classifyIntent(value);
 
   if (intent === "book") {
+    await saveSession(session, {
+      step: "book_name",
+      draft: { consentAccepted: true, consentAcceptedAt: new Date() }
+    });
+    const privacyNotice = ask(
+      language,
+      "By continuing, you agree that your booking details may be saved for appointment management.\n\n",
+      "جاری رکھنے سے آپ اپنی بکنگ کی تفصیلات اپائنٹمنٹ کے انتظام کے لیے محفوظ کرنے سے متفق ہیں۔\n\n"
+    );
+    return { text: bookingProgress(language, 1, `${privacyNotice}${patientNamePrompt(language)}`), language };
+  }
+
+  if (intent === "cancel") {
+    const appointment = await findNextActiveAppointmentByPhone(session.normalizedPhone);
+    if (!appointment) {
+      return staticReply(session, ask(
+        language,
+        "No upcoming active appointment was found for this mobile number.",
+        "اس موبائل نمبر کے لیے کوئی آئندہ فعال اپائنٹمنٹ نہیں ملی۔"
+      ));
+    }
+    await saveSession(session, {
+      step: "cancel_reason",
+      draft: {
+        appointmentId: appointment.appointmentId,
+        phone: session.normalizedPhone,
+        date: appointment.date,
+        time: appointment.time
+      }
+    });
+    return {
+      text: ask(
+        language,
+        `Appointment ${appointment.appointmentId} on ${displayDate(appointment.date, language)} at ${displayTime(appointment.time, language)} was found.\n\nPlease write a short cancellation reason.`,
+        `اپائنٹمنٹ ${appointment.appointmentId} مل گئی ہے۔\n\nبراہِ کرم منسوخی کی مختصر وجہ لکھیں۔`
+      ),
+      language
+    };
+  }
+
+  if (intent === "book_legacy") {
     await saveSession(session, { step: "book_consent", draft: {} });
     return {
       text: bookingProgress(language, 1, consentMessage(language)),
@@ -304,7 +345,7 @@ async function handleMenu(session, value) {
     await saveSession(session, { step: "reschedule_id", draft: {} });
     return { text: ask(language, "Please enter your appointment ID.", "براہِ کرم اپائنٹمنٹ آئی ڈی لکھیں۔"), language };
   }
-  if (intent === "cancel") {
+  if (intent === "cancel_legacy") {
     await saveSession(session, { step: "cancel_id", draft: {} });
     return { text: ask(language, "Please enter your appointment ID.", "براہِ کرم اپائنٹمنٹ آئی ڈی لکھیں۔"), language };
   }
@@ -376,6 +417,24 @@ async function handleBooking(session, value) {
     return { text: bookingProgress(language, 2, patientPhonePrompt(language, draft.fullName)), language };
   }
   if (session.step === "book_phone") {
+    try {
+      draft.phone = phoneSchema.parse(value);
+    } catch {
+      return { text: ask(language, "Please enter a valid phone number with country or mobile code.", "براہِ کرم ملک یا موبائل کوڈ کے ساتھ درست فون نمبر لکھیں۔"), language };
+    }
+    const locations = await locationOptions(language);
+    if (!locations.locations.length) {
+      await saveSession(session, { step: "menu", draft: {} });
+      return { text: `${locations.text}\n\n${mainMenu(language)}`, options: menuOptions(language), language };
+    }
+    const location = locations.locations[0];
+    draft.locationId = location.locationId;
+    draft.locationNameEn = location.nameEn;
+    draft.locationNameUr = location.nameUr;
+    const reply = await askDates(session, location.locationId, "book_date");
+    return { ...reply, text: bookingProgress(language, 3, reply.text) };
+  }
+  if (session.step === "book_phone_legacy") {
     try {
       draft.phone = phoneSchema.parse(value);
     } catch {
@@ -455,13 +514,13 @@ async function handleBooking(session, value) {
     draft.date = picked.date;
     await saveSession(session, { step: "book_time", draft });
     const reply = await askSlots(session, draft.locationId, draft.date, "book_time");
-    return { ...reply, text: bookingProgress(language, 5, reply.text) };
+    return { ...reply, text: bookingProgress(language, 4, reply.text) };
   }
   if (session.step === "book_time") {
     if (value === "slots_more" || value === "slots_previous") {
       const page = Number(draft.slotPage || 0) + (value === "slots_more" ? 1 : -1);
       const reply = await askSlots(session, draft.locationId, draft.date, "book_time", page);
-      return { ...reply, text: bookingProgress(language, 5, reply.text) };
+      return { ...reply, text: bookingProgress(language, 4, reply.text) };
     }
     const picked = pickByNumberOrValue(value, draft.slotOptions || [], "time");
     if (!picked) return askSlots(session, draft.locationId, draft.date, "book_time");
@@ -469,7 +528,7 @@ async function handleBooking(session, value) {
     draft.tokenNumber = picked.tokenNumber;
     await saveSession(session, { step: "book_confirm", draft });
     return {
-      text: bookingProgress(language, 6, ask(
+      text: bookingProgress(language, 5, ask(
         language,
         `Please confirm appointment:\n\nPatient: ${draft.fullName}\nDoctor: ${DOCTOR.nameEn}\nHospital: ${draft.locationNameEn}\nDate: ${displayDate(draft.date, language)}\nTime: ${displayTime(draft.time, language)}\nToken: ${draft.tokenNumber}`,
         `براہِ کرم اپائنٹمنٹ کی تصدیق کریں:\n\nمریض: ${draft.fullName}\nڈاکٹر: ${DOCTOR.nameUr}\nہسپتال: ${draft.locationNameUr}\nتاریخ: ${displayDate(draft.date, language)}\nوقت: ${displayTime(draft.time, language)}\nٹوکن: ${draft.tokenNumber}`
@@ -486,10 +545,6 @@ async function handleBooking(session, value) {
         {
           fullName: draft.fullName,
           phone: draft.phone,
-          age: draft.age,
-          gender: draft.gender,
-          city: draft.city,
-          reasonForVisit: draft.reasonForVisit,
           locationId: draft.locationId,
           date: draft.date,
           time: draft.time,
@@ -705,10 +760,7 @@ async function handleBack(session) {
     case "cancel_id":
       return resetToMenu(session, language);
     case "book_name":
-      return prompt("book_consent", bookingProgress(language, 1, consentMessage(language)), [
-        option(language === "ur" ? "میں متفق ہوں" : "I Agree", ACTIONS.consentAccept),
-        option(language === "ur" ? "میں متفق نہیں ہوں" : "I Do Not Agree", ACTIONS.consentDecline)
-      ]);
+      return resetToMenu(session, language);
     case "book_phone":
       return prompt("book_name", bookingProgress(language, 2, patientNamePrompt(language)));
     case "book_age":
@@ -726,17 +778,15 @@ async function handleBack(session) {
     case "book_location":
       return prompt("book_reason", bookingProgress(language, 2, ask(language, "Please briefly describe the reason for visit.", "براہِ کرم وزٹ کی وجہ مختصر لکھیں۔")));
     case "book_date": {
-      const locations = await locationOptions(language);
-      draft.locationOptions = locations.locations;
-      return prompt("book_location", bookingProgress(language, 3, locations.text), locations.options);
+      return prompt("book_phone", bookingProgress(language, 2, patientPhonePrompt(language, draft.fullName)));
     }
     case "book_time": {
       const reply = await askDates(session, draft.locationId, "book_date");
-      return { ...reply, text: bookingProgress(language, 4, reply.text) };
+      return { ...reply, text: bookingProgress(language, 3, reply.text) };
     }
     case "book_confirm": {
       const reply = await askSlots(session, draft.locationId, draft.date, "book_time", draft.slotPage || 0);
-      return { ...reply, text: bookingProgress(language, 5, reply.text) };
+      return { ...reply, text: bookingProgress(language, 4, reply.text) };
     }
     case "check_phone":
       return prompt("check_id", ask(language, "Please enter your appointment ID.", "براہِ کرم اپائنٹمنٹ آئی ڈی لکھیں۔"));
@@ -756,7 +806,7 @@ async function handleBack(session) {
     case "cancel_phone":
       return prompt("cancel_id", ask(language, "Please enter your appointment ID.", "براہِ کرم اپائنٹمنٹ آئی ڈی لکھیں۔"));
     case "cancel_reason":
-      return prompt("cancel_phone", ask(language, "Please enter the phone number used for booking.", "براہِ کرم بکنگ کے لیے استعمال کیا گیا فون نمبر لکھیں۔"));
+      return resetToMenu(session, language);
     case "cancel_confirm":
       return prompt("cancel_reason", ask(language, "Please write a short cancellation reason.", "براہِ کرم منسوخی کی مختصر وجہ لکھیں۔"));
     default:
@@ -782,7 +832,7 @@ async function currentSessionReply(session) {
         language
       };
     case "book_name":
-      return { text: bookingProgress(language, 2, patientNamePrompt(language)), language };
+      return { text: bookingProgress(language, 1, patientNamePrompt(language)), language };
     case "book_phone":
       return { text: bookingProgress(language, 2, patientPhonePrompt(language)), language };
     case "book_age":
@@ -803,15 +853,15 @@ async function currentSessionReply(session) {
     }
     case "book_date": {
       const reply = await askDates(session, draft.locationId, "book_date");
-      return { ...reply, text: bookingProgress(language, 4, reply.text) };
+      return { ...reply, text: bookingProgress(language, 3, reply.text) };
     }
     case "book_time": {
       const reply = await askSlots(session, draft.locationId, draft.date, "book_time", draft.slotPage || 0);
-      return { ...reply, text: bookingProgress(language, 5, reply.text) };
+      return { ...reply, text: bookingProgress(language, 4, reply.text) };
     }
     case "book_confirm":
       return {
-        text: bookingProgress(language, 6, ask(
+        text: bookingProgress(language, 5, ask(
           language,
           `Please confirm appointment:\n\nPatient: ${draft.fullName}\nDoctor: ${DOCTOR.nameEn}\nHospital: ${draft.locationNameEn}\nDate: ${displayDate(draft.date, language)}\nTime: ${displayTime(draft.time, language)}\nToken: ${draft.tokenNumber}`,
           `براہِ کرم اپائنٹمنٹ کی تصدیق کریں:\n\nمریض: ${draft.fullName}\nڈاکٹر: ${DOCTOR.nameUr}\nہسپتال: ${draft.locationNameUr}\nتاریخ: ${displayDate(draft.date, language)}\nوقت: ${displayTime(draft.time, language)}\nٹوکن: ${draft.tokenNumber}`

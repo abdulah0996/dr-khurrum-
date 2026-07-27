@@ -44,6 +44,9 @@ function query(value) {
 function awaitableQuery(value) {
   return {
     lean: async () => value,
+    sort() {
+      return this;
+    },
     then(resolve, reject) {
       return Promise.resolve(value).then(resolve, reject);
     }
@@ -117,7 +120,7 @@ async function chat(message, language) {
   return handleChatMessage({ phone: "+92 300 1234567", message, ...(language ? { language } : {}) });
 }
 
-test("a mocked end-to-end booking flow validates consent, guardian notice, clinic, date, slot, and token", async () => {
+test("a mocked end-to-end booking asks only name, mobile, date, time, and confirmation", async () => {
   session = undefined;
   createdAppointment = undefined;
 
@@ -125,20 +128,13 @@ test("a mocked end-to-end booking flow validates consent, guardian notice, clini
   const menu = await chat("1");
   assert.ok(menu.options.some((item) => item.value === "menu_book_appointment"));
   assert.doesNotMatch(menu.text, /1\.\s*Book Appointment/);
-  assert.match((await chat("1")).text, /consent|save your name/i);
-  assert.match((await chat("yes")).text, /full name/i);
+  const nameReply = await chat("1");
+  assert.match(nameReply.text, /full name/i);
+  assert.match(nameReply.text, /Step 1 of 5/);
   assert.match((await chat("Patient Name")).text, /phone number/i);
-  assert.match((await chat("03001234567")).text, /patient age/i);
-
-  const underage = await chat("17");
-  assert.match(underage.text, /parent or legal guardian/i);
-  assert.match((await chat("2")).text, /city/i);
-  assert.match((await chat("Jhang")).text, /reason for visit/i);
-
-  const locationReply = await chat("Routine consultation");
-  assert.ok(locationReply.options.some((item) => item.label.includes("Nighat Medical Complex")));
-  const dateReply = await chat("1");
+  const dateReply = await chat("03001234567");
   assert.match(dateReply.text, /available date/i);
+  assert.match(dateReply.text, /Step 3 of 5/);
   const timeReply = await chat("1");
   assert.match(timeReply.text, /available time/i);
   const confirmation = await chat("1");
@@ -368,7 +364,7 @@ test("patient names validate English and Urdu input, reject unsafe values, persi
   }
 });
 
-test("appointment lookup and cancellation verify both ID and phone before changing status", async () => {
+test("appointment cancellation asks only reason and confirmation for the caller's next booking", async () => {
   const current = {
     appointmentId: "KHR-20260720-QA1234",
     patientName: "Patient Name",
@@ -398,9 +394,10 @@ test("appointment lookup and cancellation verify both ID and phone before changi
   assert.match(lookup.text, /Nighat Medical Complex/);
   assert.match(lookup.text, /Token Number: 1/);
 
-  assert.match((await chat("4")).text, /appointment ID/i);
-  await chat(current.appointmentId);
-  assert.match((await chat(current.phone)).text, /cancellation reason/i);
+  const cancellationStart = await chat("4");
+  assert.match(cancellationStart.text, /cancellation reason/i);
+  assert.match(cancellationStart.text, new RegExp(current.appointmentId));
+  assert.equal(session.step, "cancel_reason");
   assert.match((await chat("Schedule conflict")).text, /sure you want to cancel/i);
   const cancelled = await chat("1");
   assert.equal(cancelled.appointment.status, "Cancelled");

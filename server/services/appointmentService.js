@@ -7,7 +7,7 @@ import { addAuditLogSafely } from "./auditService.js";
 import { adminAlertsForAppointments, queueAdminAppointmentAlert, scheduleAdminAlertProcessing } from "./adminAlertService.js";
 import { appointmentEmailsForAppointments, publicAppointmentEmail, queueAppointmentEmail, scheduleAppointmentEmail } from "./appointmentEmailService.js";
 import { appointmentCreateSchema, appointmentLookupSchema, appointmentRescheduleSchema, appointmentCancelSchema } from "../utils/validation.js";
-import { escapeRegex, makeAppointmentId, makePublicId, maskPhone, normalizePhone } from "../utils/time.js";
+import { escapeRegex, makeAppointmentId, makePublicId, maskPhone, normalizePhone, todayIso } from "../utils/time.js";
 
 function duplicateKeyMessage(error) {
   if (error?.code !== 11000) return null;
@@ -169,6 +169,16 @@ export async function listAppointmentsPage(filters = {}) {
 
 export async function getAppointmentById(appointmentId) {
   return models.Appointment.findOne({ appointmentId }).lean();
+}
+
+export async function findNextActiveAppointmentByPhone(phone) {
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) return null;
+  return models.Appointment.findOne({
+    normalizedPhone,
+    date: { $gte: todayIso() },
+    status: { $in: ACTIVE_APPOINTMENT_STATUSES }
+  }).sort({ date: 1, time: 1 }).lean();
 }
 
 export async function deleteAppointments(appointmentIds, actor = null, req = null) {
