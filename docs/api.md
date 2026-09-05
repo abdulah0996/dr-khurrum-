@@ -60,3 +60,4 @@ Replies retain the existing `{ "reply": ... }` envelope and include `reply.nextS
 | `PUT` | `/api/settings/schedules/:locationId` | Update timing rules. |
 | `GET` | `/api/users` | Super Admin staff list. |
 | `POST` | `/api/users` | Super Admin creates staff user. |
+| `DELETE` | `/api/users/:userId` | Super Admin deletes another staff user; the current account and last active Super Admin are protected. |

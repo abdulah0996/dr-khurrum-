@@ -55,4 +55,35 @@ router.put("/:userId", async (req, res, next) => {
   }
 });
 
+router.delete("/:userId", async (req, res, next) => {
+  try {
+    const user = await models.User.findOne({ userId: req.params.userId }).lean();
+    if (!user) return res.status(404).json({ message: "Staff user was not found." });
+    if (user.userId === req.user.userId) {
+      return res.status(409).json({ message: "You cannot delete the account you are currently signed in with." });
+    }
+
+    if (user.role === "Super Admin" && user.status === "Active") {
+      const activeSuperAdminCount = await models.User.countDocuments({ role: "Super Admin", status: "Active" });
+      if (activeSuperAdminCount <= 1) {
+        return res.status(409).json({ message: "The last active Super Admin cannot be deleted." });
+      }
+    }
+
+    await models.User.deleteOne({ userId: user.userId });
+    await addAuditLog({
+      actor: req.user,
+      action: "Staff user deleted",
+      module: "Users",
+      targetType: "User",
+      targetId: user.userId,
+      metadata: { email: user.email, role: user.role },
+      req
+    });
+    return res.json({ deletedUserId: user.userId });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 export default router;

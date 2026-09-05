@@ -322,7 +322,7 @@ function AdminApp() {
           {view === "logs" && <WhatsAppLogsView settings={data.settings} messageLogs={data.messageLogs} api={api} refresh={loadData} flash={flash} />}
           {view === "audit" && <AuditLogsView auditLogs={data.auditLogs} />}
           {view === "settings" && <SettingsView settings={data.settings} />}
-          {view === "users" && <UsersView users={data.users} api={api} refresh={loadData} flash={flash} />}
+          {view === "users" && <UsersView users={data.users} currentUser={user} api={api} refresh={loadData} flash={flash} />}
         </section>
       </main>
     </div>
@@ -1428,10 +1428,11 @@ function SettingsView({ settings }) {
   );
 }
 
-function UsersView({ users, api, refresh, flash }) {
+function UsersView({ users, currentUser, api, refresh, flash }) {
   const [form, setForm] = useState({ name: "", email: "", password: "", role: "Receptionist", status: "Active" });
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [deletingUserId, setDeletingUserId] = useState("");
 
   const submit = async (event) => {
     event.preventDefault();
@@ -1446,6 +1447,26 @@ function UsersView({ users, api, refresh, flash }) {
       setError(err.message);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const deleteUser = async (item) => {
+    setError("");
+    if (item.userId === currentUser?.userId) {
+      setError("You cannot delete the account you are currently signed in with.");
+      return;
+    }
+    if (!window.confirm(`Delete staff user ${item.email}? This permanently removes their admin access.`)) return;
+
+    setDeletingUserId(item.userId);
+    try {
+      await api(`/users/${encodeURIComponent(item.userId)}`, { method: "DELETE" });
+      await refresh();
+      flash("Staff user deleted.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDeletingUserId("");
     }
   };
 
@@ -1494,6 +1515,7 @@ function UsersView({ users, api, refresh, flash }) {
                   <th>Email</th>
                   <th>Role</th>
                   <th>Status</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1503,6 +1525,22 @@ function UsersView({ users, api, refresh, flash }) {
                     <td>{item.email}</td>
                     <td>{item.role}</td>
                     <td>{item.status}</td>
+                    <td className="row-actions">
+                      {item.userId === currentUser?.userId ? (
+                        <span className="current-user-label">Current account</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="danger-icon-button"
+                          title={`Delete ${item.email}`}
+                          aria-label={`Delete ${item.email}`}
+                          disabled={deletingUserId === item.userId}
+                          onClick={() => deleteUser(item)}
+                        >
+                          <XCircle size={18} />
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

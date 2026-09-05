@@ -563,6 +563,23 @@ td small {
   gap: 6px;
 }
 
+.row-actions .danger-icon-button {
+  color: var(--red);
+}
+
+.row-actions .danger-icon-button:hover {
+  border-color: rgba(190, 24, 93, 0.42);
+  background: #fff1f2;
+  color: var(--red);
+}
+
+.current-user-label {
+  color: #5f7780;
+  font-size: 0.76rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
 .reason-cell {
   max-width: 300px;
   overflow: hidden;
