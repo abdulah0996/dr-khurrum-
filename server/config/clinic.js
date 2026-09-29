@@ -53,7 +53,7 @@ export const VERIFIED_CLINIC = {
 export const DEFAULT_LOCATIONS = [];
 
 export const APPOINTMENT_POLICIES = {
-  advanceBookingDays: 30,
+  advanceBookingDays: 7,
   sameDayCutoffMinutes: 30,
   cancellationCutoffMinutes: 120,
   rescheduleCutoffMinutes: 120,
