@@ -333,12 +333,24 @@ export const WebhookEventSchema = new mongoose.Schema(
     provider: { type: String, required: true, index: true },
     providerEventId: { type: String, required: true, index: true },
     eventType: { type: String, trim: true },
-    processedAt: { type: Date, default: Date.now }
+    status: {
+      type: String,
+      enum: ["processing", "completed", "failed", "dead_letter"],
+      default: "processing",
+      index: true
+    },
+    attempts: { type: Number, default: 1, min: 1 },
+    lockedAt: Date,
+    completedAt: Date,
+    nextRetryAt: Date,
+    lastError: { type: String, trim: true, default: "" },
+    processedAt: Date
   },
-  { timestamps: false, versionKey: false }
+  schemaOptions
 );
 
 WebhookEventSchema.index({ provider: 1, providerEventId: 1 }, { unique: true });
+WebhookEventSchema.index({ status: 1, nextRetryAt: 1, lockedAt: 1 });
 
 export const ChatSessionSchema = new mongoose.Schema(
   {

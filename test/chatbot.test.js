@@ -84,10 +84,10 @@ test("verified schedule creates exactly 28 time-linked tokens and excludes the p
   assert.equal(generateScheduleSlots(VERIFIED_GENERAL_SCHEDULE, "2026-07-05").length, 0);
 });
 
-test("booking windows enforce 30 days and the same-day 30-minute cutoff", () => {
+test("booking windows expose fourteen dates and enforce the same-day 30-minute cutoff", () => {
   assert.equal(isWithinAdvanceWindow("2026-07-15", "2026-07-15"), true);
-  assert.equal(isWithinAdvanceWindow("2026-08-14", "2026-07-15"), true);
-  assert.equal(isWithinAdvanceWindow("2026-08-15", "2026-07-15"), false);
+  assert.equal(isWithinAdvanceWindow("2026-07-28", "2026-07-15"), true);
+  assert.equal(isWithinAdvanceWindow("2026-07-29", "2026-07-15"), false);
   assert.equal(isInsideSameDayCutoff("10:29", "10:00"), true);
   assert.equal(isInsideSameDayCutoff("10:30", "10:00"), false);
   assert.equal(APPOINTMENT_POLICIES.sameDayCutoffMinutes, 30);

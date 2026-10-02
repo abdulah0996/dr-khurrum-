@@ -20,6 +20,15 @@ const OPERATIONAL_MESSAGE_TYPES = new Set([
   "opt_out_confirmation"
 ]);
 
+async function addWhatsAppAuditSafely(entry) {
+  try {
+    return await addAuditLog(entry);
+  } catch (error) {
+    console.error("WhatsApp audit log write failed", { action: entry.action, error: compactText(error?.message, 200) });
+    return null;
+  }
+}
+
 const OPT_OUT_MESSAGES = new Set([
   "stop",
   "unsubscribe",
@@ -515,12 +524,12 @@ export async function sendWhatsAppText({
 
     if (!result.ok) {
       await recordDeliveryFailure(to);
-      await addAuditLog({ actor, action: "WhatsApp message failed", module: "WhatsApp", targetType: "Message", targetId: result.providerMessageId, metadata: { error: result.error } });
+      await addWhatsAppAuditSafely({ actor, action: "WhatsApp message failed", module: "WhatsApp", targetType: "Message", targetId: result.providerMessageId, metadata: { error: result.error } });
       return { sent: false, status, providerMessageId: result.providerMessageId, error: result.error, retryCount: result.retryCount };
     }
 
     await recordDeliverySuccess(to);
-    await addAuditLog({ actor, action: "WhatsApp message sent", module: "WhatsApp", targetType: "Message", targetId: result.providerMessageId });
+    await addWhatsAppAuditSafely({ actor, action: "WhatsApp message sent", module: "WhatsApp", targetType: "Message", targetId: result.providerMessageId });
     return {
       sent: true,
       status,
@@ -542,7 +551,7 @@ export async function sendWhatsAppText({
       error: error.message
     });
     await recordDeliveryFailure(to);
-    await addAuditLog({ actor, action: "WhatsApp message failed", module: "WhatsApp", metadata: { error: error.message } });
+    await addWhatsAppAuditSafely({ actor, action: "WhatsApp message failed", module: "WhatsApp", metadata: { error: error.message } });
     return { sent: false, status: "failed", error: error.message };
   }
 }
@@ -572,20 +581,101 @@ export function verifyMetaSignature(req) {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
-export async function recordWebhookEvent(providerEventId, eventType) {
-  if (!providerEventId) return { inserted: false, duplicate: false };
+const WEBHOOK_MAX_ATTEMPTS = 5;
+const WEBHOOK_STALE_MS = 2 * 60 * 1000;
+
+function retryableWebhookQuery(now) {
+  const staleBefore = new Date(now.getTime() - WEBHOOK_STALE_MS);
+  return {
+    $or: [
+      { status: "failed", $or: [{ nextRetryAt: null }, { nextRetryAt: { $exists: false } }, { nextRetryAt: { $lte: now } }] },
+      { status: "processing", $or: [{ lockedAt: null }, { lockedAt: { $exists: false } }, { lockedAt: { $lte: staleBefore } }] }
+    ]
+  };
+}
+
+export async function recordWebhookEvent(providerEventId, eventType, { now = new Date() } = {}) {
+  if (!providerEventId) return { inserted: false, duplicate: false, accepted: false };
   try {
-    await models.WebhookEvent.create({
+    const event = await models.WebhookEvent.create({
       eventId: makePublicId("EVT"),
       provider: "WhatsApp",
       providerEventId,
-      eventType
+      eventType,
+      status: "processing",
+      attempts: 1,
+      lockedAt: now,
+      processedAt: null
     });
-    return { inserted: true, duplicate: false };
+    return { inserted: true, duplicate: false, accepted: true, event };
   } catch (error) {
-    if (error.code === 11000) return { inserted: false, duplicate: true };
-    throw error;
+    if (error.code !== 11000) throw error;
+
+    const existing = await models.WebhookEvent.findOne({ provider: "WhatsApp", providerEventId }).lean();
+    if (!existing || existing.status === "completed" || existing.status === "dead_letter" || !existing.status) {
+      return { inserted: false, duplicate: true, accepted: false, event: existing };
+    }
+
+    if (Number(existing.attempts || 0) >= WEBHOOK_MAX_ATTEMPTS) {
+      const event = await models.WebhookEvent.findOneAndUpdate(
+        { _id: existing._id, ...retryableWebhookQuery(now) },
+        { $set: { status: "dead_letter", lockedAt: null, nextRetryAt: null } },
+        { returnDocument: "after" }
+      ).lean();
+      return { inserted: false, duplicate: true, accepted: false, event: event || existing };
+    }
+
+    const event = await models.WebhookEvent.findOneAndUpdate(
+      {
+        _id: existing._id,
+        attempts: { $lt: WEBHOOK_MAX_ATTEMPTS },
+        ...retryableWebhookQuery(now)
+      },
+      {
+        $set: { status: "processing", lockedAt: now, nextRetryAt: null, lastError: "" },
+        $inc: { attempts: 1 }
+      },
+      { returnDocument: "after" }
+    ).lean();
+
+    return event
+      ? { inserted: false, duplicate: false, accepted: true, retry: true, event }
+      : {
+          inserted: false,
+          duplicate: true,
+          accepted: false,
+          inProgress: existing.status === "processing",
+          deferred: existing.status === "failed",
+          event: existing
+        };
   }
+}
+
+export async function completeWebhookEvent(providerEventId) {
+  const now = new Date();
+  return models.WebhookEvent.findOneAndUpdate(
+    { provider: "WhatsApp", providerEventId, status: "processing" },
+    { $set: { status: "completed", completedAt: now, processedAt: now, lockedAt: null, nextRetryAt: null, lastError: "" } },
+    { returnDocument: "after" }
+  ).lean();
+}
+
+export async function failWebhookEvent(providerEventId, error) {
+  const existing = await models.WebhookEvent.findOne({ provider: "WhatsApp", providerEventId }).lean();
+  if (!existing) return null;
+  const deadLetter = Number(existing.attempts || 0) >= WEBHOOK_MAX_ATTEMPTS;
+  return models.WebhookEvent.findOneAndUpdate(
+    { _id: existing._id, status: "processing" },
+    {
+      $set: {
+        status: deadLetter ? "dead_letter" : "failed",
+        lockedAt: null,
+        nextRetryAt: deadLetter ? null : new Date(Date.now() + Math.min(60000, 1000 * 2 ** Number(existing.attempts || 1))),
+        lastError: compactText(error?.message || "Webhook processing failed", 300)
+      }
+    },
+    { returnDocument: "after" }
+  ).lean();
 }
 
 export async function listMessageLogs(limit = 300) {

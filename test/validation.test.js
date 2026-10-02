@@ -71,7 +71,8 @@ test("partial-day blocks require ordered start and end times", () => {
 test("advance-window comparisons reject invalid dates instead of relying on string ordering", () => {
   assert.equal(isWithinAdvanceWindow("not-a-date", "2026-07-15"), false);
   assert.equal(isWithinAdvanceWindow("2026-07-14", "2026-07-15"), false);
-  assert.equal(isWithinAdvanceWindow("2026-08-14", "2026-07-15"), true);
+  assert.equal(isWithinAdvanceWindow("2026-07-28", "2026-07-15"), true);
+  assert.equal(isWithinAdvanceWindow("2026-07-29", "2026-07-15"), false);
 });
 
 test("production environment validation accepts a complete configuration and rejects unsafe values", () => {

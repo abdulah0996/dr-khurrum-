@@ -9,7 +9,14 @@ import helmet from "helmet";
 import { ensureRuntimeDefaults } from "./config/runtime.js";
 import { parseTrustProxy } from "./config/trustProxy.js";
 import { validateEnvironment } from "./config/validation.js";
-import { connectDatabase, databaseHealth, disconnectDatabase } from "./db/connection.js";
+import {
+  connectDatabase,
+  databaseHealth,
+  disconnectDatabase,
+  isDatabaseReady,
+  markDatabaseInitialized,
+  startDatabaseRecovery
+} from "./db/connection.js";
 import { authenticate } from "./middleware/auth.js";
 import { rejectParameterPollution, requestId, sanitizeInput, securityHeaders } from "./middleware/security.js";
 import appointmentsRoutes from "./routes/appointments.js";
@@ -29,7 +36,6 @@ const port = process.env.PORT && isNaN(Number(process.env.PORT)) ? process.env.P
 let server;
 ensureRuntimeDefaults();
 let startupValidation = validateEnvironment();
-let databaseDisabled = false;
 
 function allowedOrigins() {
   const configured = String(process.env.CORS_ALLOWED_ORIGINS || "")
@@ -94,7 +100,9 @@ app.use(rejectParameterPollution);
 app.use(sanitizeInput);
 app.use(generalLimiter);
 app.use((req, res, next) => {
-  if (databaseDisabled && req.path.startsWith("/api") && req.path !== "/api/health") {
+  const isHealthCheck = req.path.startsWith("/api/health");
+  const isWebhookVerification = req.method === "GET" && req.path === "/api/whatsapp/webhook";
+  if (process.env.NODE_ENV !== "test" && !isDatabaseReady() && req.path.startsWith("/api") && !isHealthCheck && !isWebhookVerification) {
     return res.status(503).json({ message: "Database connection is not available. Please try again later." });
   }
   return next();
@@ -161,7 +169,6 @@ async function start() {
     );
   }
 
-  databaseDisabled = true;
   await new Promise((resolve, reject) => {
     server = app.listen(port, () => {
       const address = typeof port === "string" ? port : `http://localhost:${port}`;
@@ -176,16 +183,21 @@ async function start() {
 
   try {
     const database = await connectDatabase();
-    databaseDisabled = !database.connected;
     if (database.connected) {
       await ensureClinicConfiguration();
+      markDatabaseInitialized();
     } else {
       console.warn("MongoDB is unavailable. The website remains online and API routes will return 503 until the database connection is restored.");
     }
   } catch (error) {
-    databaseDisabled = true;
     console.error("Database initialization failed after the HTTP server started:", error.message);
   }
+  startDatabaseRecovery({
+    onConnected: async () => {
+      await ensureClinicConfiguration();
+      console.log("MongoDB recovery completed; database API routes are available again.");
+    }
+  });
 }
 
 async function shutdown(signal, exitCode = 0) {

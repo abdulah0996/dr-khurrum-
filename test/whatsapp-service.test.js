@@ -16,7 +16,11 @@ const originals = {
     findOneAndUpdate: models.WhatsAppConsent.findOneAndUpdate
   },
   AuditLog: { create: models.AuditLog.create },
-  WebhookEvent: { create: models.WebhookEvent.create }
+  WebhookEvent: {
+    create: models.WebhookEvent.create,
+    findOne: models.WebhookEvent.findOne,
+    findOneAndUpdate: models.WebhookEvent.findOneAndUpdate
+  }
 };
 
 let consent;
@@ -187,6 +191,43 @@ test("duplicate Meta event IDs are treated as already processed", async () => {
     error.code = 11000;
     throw error;
   };
-  assert.deepEqual(await recordWebhookEvent("wamid.duplicate", "text"), { inserted: false, duplicate: true });
-  assert.deepEqual(await recordWebhookEvent("", "text"), { inserted: false, duplicate: false });
+  const completed = { _id: "event-1", providerEventId: "wamid.duplicate", status: "completed", attempts: 1 };
+  models.WebhookEvent.findOne = () => ({ lean: async () => completed });
+  assert.deepEqual(await recordWebhookEvent("wamid.duplicate", "text"), {
+    inserted: false,
+    duplicate: true,
+    accepted: false,
+    event: completed
+  });
+  assert.deepEqual(await recordWebhookEvent("", "text"), { inserted: false, duplicate: false, accepted: false });
+});
+
+test("a failed Meta event is atomically accepted for retry after its backoff", async () => {
+  models.WebhookEvent.create = async () => {
+    const error = new Error("duplicate event");
+    error.code = 11000;
+    throw error;
+  };
+  const failed = {
+    _id: "event-2",
+    providerEventId: "wamid.retry",
+    status: "failed",
+    attempts: 1,
+    nextRetryAt: new Date("2026-07-20T11:59:00.000Z")
+  };
+  const retried = { ...failed, status: "processing", attempts: 2 };
+  let update;
+  models.WebhookEvent.findOne = () => ({ lean: async () => failed });
+  models.WebhookEvent.findOneAndUpdate = (_filter, value) => ({
+    lean: async () => {
+      update = value;
+      return retried;
+    }
+  });
+
+  const result = await recordWebhookEvent("wamid.retry", "text", { now: new Date("2026-07-20T12:00:00.000Z") });
+  assert.equal(result.accepted, true);
+  assert.equal(result.retry, true);
+  assert.deepEqual(update.$inc, { attempts: 1 });
+  assert.equal(update.$set.status, "processing");
 });
