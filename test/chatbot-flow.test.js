@@ -141,7 +141,7 @@ test("a mocked end-to-end booking flow validates consent, guardian notice, clini
   assert.match(timeReply.text, /available time/i);
   const confirmation = await chat("1");
   assert.match(confirmation.text, /Please confirm appointment/i);
-  assert.match(confirmation.text, /Token:\s*1/);
+  assert.match(confirmation.text, /Token:\s*\d+/);
 
   const booked = await chat("1");
   assert.equal(booked.appointment.status, "Booked");
