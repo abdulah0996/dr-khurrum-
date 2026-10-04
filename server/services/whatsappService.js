@@ -546,6 +546,13 @@ export async function sendWhatsAppText({
 
   try {
     let result = await sendWithRetry(payload);
+    if (!result.ok) {
+  console.error("META WHATSAPP SEND REJECTED", {
+    statusCode: result.statusCode,
+    error: result.error,
+    providerMessageId: result.providerMessageId
+  });
+}
     let usedInteractiveFallback = false;
     if (!result.ok && payload.type === "interactive") {
       const fallbackPayload = buildWhatsAppPayload({
