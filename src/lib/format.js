@@ -41,8 +41,15 @@ export function displayTime(time) {
   }).format(date);
 }
 
-export function todayIso() {
-  return new Date().toISOString().slice(0, 10);
+export function todayIso(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Karachi",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
 }
 
 export function statusClass(status) {
