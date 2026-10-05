@@ -545,11 +545,17 @@ export async function sendWhatsAppText({
   });
 
   try {
-    let result = await sendWithRetry(payload);
-    if (!result.ok) {
+let result = await sendWithRetry(payload);
+
+if (!result.ok) {
   console.error("META WHATSAPP SEND REJECTED", {
     statusCode: result.statusCode,
     error: result.error,
+    providerMessageId: result.providerMessageId
+  });
+} else {
+  console.log("META WHATSAPP SEND SUCCESS", {
+    statusCode: result.statusCode,
     providerMessageId: result.providerMessageId
   });
 }
