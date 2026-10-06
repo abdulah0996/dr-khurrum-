@@ -60,11 +60,37 @@ export async function processWebhookPayload(payload) {
   for (const entry of entries) {
     for (const change of entry.changes || []) {
       const value = change.value || {};
-
+/*
       for (const status of value.statuses || []) {
         await updateMessageStatus(status.id, status.status);
         await updateAdminAlertDeliveryStatus(status.id, status.status, String(status.errors?.[0]?.code || ""));
       }
+      */
+
+      for (const status of value.statuses || []) {
+  const error = status.errors?.[0] || null;
+
+  console.log(
+    "META WHATSAPP DELIVERY STATUS",
+    JSON.stringify({
+      providerMessageId: status.id || "",
+      status: status.status || "",
+      recipientId: status.recipient_id || "",
+      errorCode: error?.code || "",
+      errorTitle: error?.title || "",
+      errorMessage: error?.message || "",
+      errorDetails: error?.error_data?.details || ""
+    })
+  );
+
+  await updateMessageStatus(status.id, status.status);
+
+  await updateAdminAlertDeliveryStatus(
+    status.id,
+    status.status,
+    String(error?.code || "")
+  );
+}
 
       for (const message of value.messages || []) {
         const event = await recordWebhookEvent(message.id, message.type || "message");
