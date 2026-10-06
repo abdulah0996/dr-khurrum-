@@ -554,7 +554,7 @@ async function verifyAppointment(session, id, phone) {
   }
   return { appointment };
 }
-
+/*
 async function handleCheck(session, value) {
   const language = session.language;
   const draft = session.draft || {};
@@ -568,7 +568,61 @@ async function handleCheck(session, value) {
   if (verified.error) return { ...verified.reply, text: `${verified.reply.text}\n\n${mainMenu(language)}`, options: menuOptions(language) };
   return { text: `${appointmentLookupMessage(verified.appointment, language)}\n\n${mainMenu(language)}`, options: menuOptions(language), language };
 }
+*/
+async function handleCheck(session, value) {
+  const language = session.language;
+  const draft = session.draft || {};
 
+  if (session.step === "check_id") {
+    draft.appointmentId = compactText(value, 40);
+    await saveSession(session, { step: "check_phone", draft });
+
+    return {
+      text: ask(
+        language,
+        "Please enter the phone number used for booking.",
+        "براہِ کرم وہ فون نمبر لکھیں جس سے بکنگ کی گئی تھی۔"
+      ),
+      language
+    };
+  }
+
+  const parsedPhone = phoneSchema.safeParse(value);
+
+  if (!parsedPhone.success) {
+    return {
+      text: ask(
+        language,
+        "Please enter a valid phone number.",
+        "براہِ کرم درست فون نمبر لکھیں۔"
+      ),
+      language
+    };
+  }
+
+  const normalizedPhone = parsedPhone.data;
+
+  const verified = await verifyAppointment(
+    session,
+    draft.appointmentId,
+    normalizedPhone
+  );
+
+  if (verified.error) {
+    return verified.reply;
+  }
+
+  await saveSession(session, { step: "menu", draft: {} });
+
+  return {
+    text: `${appointmentLookupMessage(
+      verified.appointment,
+      language
+    )}\n\n${mainMenu(language)}`,
+    options: menuOptions(language),
+    language
+  };
+}
 async function handleReschedule(session, value) {
   const language = session.language;
   const draft = session.draft || {};
@@ -577,6 +631,7 @@ async function handleReschedule(session, value) {
     await saveSession(session, { step: "reschedule_phone", draft });
     return { text: ask(language, "Please enter the phone number used for booking.", "براہِ کرم وہ فون نمبر لکھیں جس سے بکنگ کی گئی تھی۔"), language };
   }
+  /*
   if (session.step === "reschedule_phone") {
     const verified = await verifyAppointment(session, draft.appointmentId, value);
     if (verified.error) return verified.reply;
@@ -586,6 +641,50 @@ async function handleReschedule(session, value) {
       return { text: `${ask(language, "This appointment is not active and cannot be rescheduled.", "یہ اپائنٹمنٹ فعال نہیں، اس لیے تبدیل نہیں ہو سکتی۔")}\n\n${mainMenu(language)}`, options: menuOptions(language), language };
     }
     draft.phone = phoneSchema.parse(value);
+    */
+  if (session.step === "reschedule_phone") {
+  const parsedPhone = phoneSchema.safeParse(value);
+
+  if (!parsedPhone.success) {
+    return {
+      text: ask(
+        language,
+        "Please enter a valid phone number.",
+        "براہِ کرم درست فون نمبر لکھیں۔"
+      ),
+      language
+    };
+  }
+
+  const normalizedPhone = parsedPhone.data;
+
+  const verified = await verifyAppointment(
+    session,
+    draft.appointmentId,
+    normalizedPhone
+  );
+
+  if (verified.error) return verified.reply;
+
+  const full = await getAppointmentById(
+    verified.appointment.appointmentId
+  );
+
+  if (!["Booked", "Rescheduled"].includes(full.status)) {
+    await saveSession(session, { step: "menu", draft: {} });
+
+    return {
+      text: `${ask(
+        language,
+        "This appointment is not active and cannot be rescheduled.",
+        "یہ اپائنٹمنٹ فعال نہیں، اس لیے تبدیل نہیں ہو سکتی۔"
+      )}\n\n${mainMenu(language)}`,
+      options: menuOptions(language),
+      language
+    };
+  }
+
+  draft.phone = normalizedPhone;
     draft.currentAppointment = full;
     const locations = await locationOptions(language);
     if (!locations.locations.length) {
@@ -672,6 +771,7 @@ async function handleCancel(session, value) {
     await saveSession(session, { step: "cancel_phone", draft });
     return { text: ask(language, "Please enter the phone number used for booking.", "براہِ کرم وہ فون نمبر لکھیں جس سے بکنگ کی گئی تھی۔"), language };
   }
+  /*
   if (session.step === "cancel_phone") {
     const verified = await verifyAppointment(session, draft.appointmentId, value);
     if (verified.error) return verified.reply;
@@ -679,6 +779,47 @@ async function handleCancel(session, value) {
     await saveSession(session, { step: "cancel_reason", draft });
     return { text: ask(language, "Please write a short cancellation reason.", "براہِ کرم منسوخی کی مختصر وجہ لکھیں۔"), language };
   }
+  */
+  if (session.step === "cancel_phone") {
+  const parsedPhone = phoneSchema.safeParse(value);
+
+  if (!parsedPhone.success) {
+    return {
+      text: ask(
+        language,
+        "Please enter a valid phone number.",
+        "براہِ کرم درست فون نمبر لکھیں۔"
+      ),
+      language
+    };
+  }
+
+  const normalizedPhone = parsedPhone.data;
+
+  const verified = await verifyAppointment(
+    session,
+    draft.appointmentId,
+    normalizedPhone
+  );
+
+  if (verified.error) return verified.reply;
+
+  draft.phone = normalizedPhone;
+
+  await saveSession(session, {
+    step: "cancel_reason",
+    draft
+  });
+
+  return {
+    text: ask(
+      language,
+      "Please write a short cancellation reason.",
+      "براہِ کرم منسوخی کی مختصر وجہ لکھیں۔"
+    ),
+    language
+  };
+}
   if (session.step === "cancel_reason") {
     draft.reason = compactText(value, 250);
     if (draft.reason.length < 2) return { text: ask(language, "Please write a cancellation reason.", "براہِ کرم منسوخی کی وجہ لکھیں۔"), language };
