@@ -82,7 +82,7 @@ export function displayTime(time, language = "en") {
     timeZone: "UTC"
   }).format(date);
 }
-
+/*
 export function normalizePhone(phone) {
   const raw = String(phone || "").trim();
   const digits = raw.replace(/[^\d]/g, "");
@@ -95,7 +95,37 @@ export function normalizePhone(phone) {
 
   return raw.replace(/[^\d+]/g, "");
 }
+*/
+export function normalizePhone(phone) {
+  const raw = String(phone || "").trim();
+  let digits = raw.replace(/[^\d]/g, "");
 
+  if (digits.startsWith("00")) {
+    digits = digits.slice(2);
+  }
+
+  if (/^03\d{9}$/.test(digits)) {
+    return `+92${digits.slice(1)}`;
+  }
+
+  if (/^3\d{9}$/.test(digits)) {
+    return `+92${digits}`;
+  }
+
+  if (/^92\d{10}$/.test(digits)) {
+    return `+${digits}`;
+  }
+
+  if (/^0[1-9]\d{8,9}$/.test(digits)) {
+    return `+92${digits.slice(1)}`;
+  }
+
+  if (/^\d{10,15}$/.test(digits)) {
+    return `+${digits}`;
+  }
+
+  return raw.replace(/[^\d+]/g, "");
+}
 export function patientIdentityKey({ phone, fullName, gender }) {
   const normalizedName = compactText(fullName, 100)
     .normalize("NFKC")
